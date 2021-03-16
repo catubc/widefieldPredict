@@ -106,6 +106,7 @@ class EventTriggeredMaps():
             print ("locs 44 thrshold missing", recording)
             return np.zeros((0),'float32'), np.zeros((0),'float32')
 
+        #print ("Locs 44 threshold: ", locs_44threshold)
         codes = np.load(root_dir + '/tif_files/' + recording + '/'+recording + '_code44threshold.npy')
         code = b'04'
         idx = np.where(codes==code)[0]
@@ -263,13 +264,21 @@ class EventTriggeredMaps():
         #print ("rec_filename: ", rec_filename)
 
         index = None
+        if '4TBSSD' in self.main_dir:
+            suffix = '4TBSSD'
+        elif '1TB' in self.main_dir:
+            suffix = '1TB'
+        else:
+            print ("New computer need to reset file locations")
+            return None
+
         for k in range(len(temp_tif_files)):
             try:
-                temp_temp = temp_tif_files[k].decode("utf-8").replace('12TB/in_vivo/tim','4TBSSD').replace(
-                                                        '10TB/in_vivo/tim','4TBSSD')#.replace("b'/", "'/")
+                temp_temp = temp_tif_files[k].decode("utf-8").replace('12TB/in_vivo/tim',suffix).replace(
+                                                        '10TB/in_vivo/tim',suffix)#.replace("b'/", "'/")
             except:
-                temp_temp = temp_tif_files[k].replace('12TB/in_vivo/tim','4TBSSD').replace(
-                                                        '10TB/in_vivo/tim','4TBSSD')#.replace("b'/", "'/")
+                temp_temp = temp_tif_files[k].replace('12TB/in_vivo/tim',suffix).replace(
+                                                        '10TB/in_vivo/tim',suffix)#.replace("b'/", "'/")
             if rec_filename in temp_temp:
                 index = k
                 break
@@ -283,12 +292,13 @@ class EventTriggeredMaps():
         #print ("INDEX: ", index)
         #print ("temp event files indexed: ", len(temp_event_files[index]))
         # load the reclength based
+        #print (" RECLEN FILE: ", temp_event_files[index])
         try:
-            reclength = self.load_reclength(temp_event_files[index].decode("utf-8").replace(
-                                                        '10TB/in_vivo/tim','4TBSSD'))
+            reclength = self.load_reclength(temp_event_files[index].replace(
+                                                        '12TB/in_vivo/tim',suffix))
         except:
             reclength = self.load_reclength(temp_event_files[index].replace(
-                                                        '10TB/in_vivo/tim','4TBSSD'))
+                                                        '10TB/in_vivo/tim',suffix))
 
         if reclength ==0:
             print ("zero length recording exiting (excitation light failure)", recording)
@@ -331,6 +341,7 @@ class EventTriggeredMaps():
         counter=-1
         window = n_sec * session_img_rate      #THIS MAY NOT BE GOOD ENOUGH; SHOULD ALWAYS GO BACK AT LEAST X SECONDS EVEN IF WINDOW IS ONLY 1SEC or 0.5sec...
                                                                 #Alternatively: always compute using at least 3sec window, and then just zoom in
+        #print ("tirggers: ", img_frame_triggers)
         for trigger in img_frame_triggers:
             counter+=1
             #NB: Ensure enough space for the sliding window; usually 2 x #frames in window
@@ -491,9 +502,12 @@ class EventTriggeredMaps():
         dff_method = 'globalAverage'
 
         locs_selected, locs_selected_with_lockout = self.get_04_triggers_with_lockout(root_dir,
-                                                                                recording,
-                                                                                lockout_window)
-
+                                                                                    recording,
+                                                                                    lockout_window)
+        if len(locs_selected)==0:
+            print (" ... session does not have lever pulls ")
+            return
+        
         # GENERATE SAVE FILENAMES FOR ALL CODE_04 DATA
         fname_04 = (root_dir + '/tif_files/' + recording + '/' + recording + "_"+feature_name+
                     "_trial_ROItimeCourses_"+str(n_sec_window)+"sec.npy")
@@ -507,20 +521,20 @@ class EventTriggeredMaps():
 
         #if os.path.exists(fname_04)==False:
         self.generate_arrays_ROI_triggered(root_dir,
-                                                             dff_method,
-                                                             recording,
-                                                             locs_selected,
-                                                             n_sec_window,
-                                                             fname_04,
-                                                             fname_random,
-                                                             recompute,
-                                                             midline_filter_flag,
-                                                             save_stm_flag,
-                                                             transform_data_flag,
-                                                             use_fixed_filter_flag,
-                                                             fname_filter,
-                                                              pca_denoise_flag
-                                                             )
+                                             dff_method,
+                                             recording,
+                                             locs_selected,
+                                             n_sec_window,
+                                             fname_04,
+                                             fname_random,
+                                             recompute,
+                                             midline_filter_flag,
+                                             save_stm_flag,
+                                             transform_data_flag,
+                                             use_fixed_filter_flag,
+                                             fname_filter,
+                                              pca_denoise_flag
+                                             )
 
         # GENERATE SAVE FILENAMES FOR LOCKOUT DATA
         fname_04 = (root_dir + '/tif_files/' + recording + '/' + recording + "_"+feature_name+
@@ -686,7 +700,7 @@ class EventTriggeredMaps():
 
         # return if DFF data is none
         if data_stm.shape[0]==0:
-            print ("data_stm is None (could not compute stm, skipping)", recording)
+            print ("data_stm is empty (could not compute stm, skipping)", recording)
             return np.zeros((0), 'float32'), np.zeros((0), 'float32')
 
         # try to load transform coordinates to assess filter power
@@ -779,7 +793,11 @@ class EventTriggeredMaps():
             # CONVERT DATA FROM 128 x 128 to 35 ROIs
 
             # load Allen Institute afine transformation to scale data
-            maskwarp = np.load('/media/cat/4TBSSD/yuki/maskwarp.npy')
+            if '4TBSSD' in self.main_dir:
+                suffix = '4TBSSD'
+            else:
+                suffix = '1TB'
+            maskwarp = np.load('/media/cat/'+suffix+'/yuki/maskwarp.npy')
 
             # accumulate mean activity in each ROI
             # input data shape: [# trials, # times, width, height]
@@ -1115,9 +1133,9 @@ class EventTriggeredMaps():
                                    pm_pbar=True)
             else:
                 for recording in tqdm(recordings):
-                    print ("recording: ", recording)
 
                     if  self.sessions in recording or self.sessions=='all':
+                        print ("recording: ", recording)
                     #
                         self.compute_trial_courses_ROI_code04_trigger(recording,
                                                                root_dir,
@@ -1131,3 +1149,5 @@ class EventTriggeredMaps():
                                                                use_fixed_filter_flag,
                                                                fname_filter,
                                                                pca_denoise_flag)
+
+        print ("DONE STMs....")

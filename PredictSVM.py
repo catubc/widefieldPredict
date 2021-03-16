@@ -304,7 +304,8 @@ class PredictSVM():
         #
         prefix1 = ''
         if self.lockout:
-            prefix = '_lockout_'+str(self.lockout_window)+"sec_"
+            prefix1 = '_lockout_'+str(self.lockout_window)+"sec"
+
         #
         prefix2 = ''
         if self.pca_flag:
@@ -399,3 +400,5 @@ class PredictSVM():
                                  )
 
             np.save(fname_out,data_out)
+
+        print ("DONE predicting SVM ...")

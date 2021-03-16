@@ -108,7 +108,7 @@ class Visualize():
 
         prefix1 = ''
         if self.lockout:
-            prefix = '_lockout_'+str(self.lockout_window)+"sec_"
+            prefix1 = '_lockout_'+str(self.lockout_window)+"sec"
         #
         prefix2 = ''
         if self.pca_flag:
@@ -133,10 +133,6 @@ class Visualize():
         #
         if ax is None:
             ax=plt.subplot(111)
-
-        #
-
-        #
 
         self.get_fname()
 
