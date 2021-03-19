@@ -805,7 +805,6 @@ class EventTriggeredMaps():
 
             # save area ids, time courses for event triggered and random data
             np.save(fname_04[:-4]+ "_area_ids.npy", area_ids)
-            np.save(fname_04, trial_courses_fixed)
 
         ########################################################
         ########## COMPUTE CONTROL/RANDOM DATA #################
@@ -868,6 +867,7 @@ class EventTriggeredMaps():
             trial_courses_fixed, trial_courses_random_fixed = self.fix_trials(trial_courses,
                                                                               trial_courses_random)
             np.save(fname_random, trial_courses_random_fixed)
+            np.save(fname_04, trial_courses_fixed)
 
         # return trial_courses_fixed, trial_courses_random_fixed
 
