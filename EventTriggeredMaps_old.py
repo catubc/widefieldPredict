@@ -260,7 +260,10 @@ class EventTriggeredMaps():
         temp_event_files = np.load(event_files)
         if len(temp_event_files)==1:
             temp_event_files = temp_event_files[0]
+        #print ("temp_tif files;l", temp_tif_files)
+        #print ("rec_filename: ", rec_filename)
 
+        index = None
         if '4TBSSD' in self.main_dir:
             suffix = '4TBSSD'
         elif '1TB' in self.main_dir:
@@ -269,7 +272,6 @@ class EventTriggeredMaps():
             print ("New computer need to reset file locations")
             return None
 
-        index = None
         for k in range(len(temp_tif_files)):
             try:
                 temp_temp = temp_tif_files[k].decode("utf-8").replace('12TB/in_vivo/tim',suffix).replace(
@@ -287,12 +289,16 @@ class EventTriggeredMaps():
             #print (temp_tif_files)
             return np.zeros((0),'float32')
 
+        #print ("INDEX: ", index)
+        #print ("temp event files indexed: ", len(temp_event_files[index]))
+        # load the reclength based
+        #print (" RECLEN FILE: ", temp_event_files[index])
         try:
-            reclength = self.load_reclength(str(temp_event_files[index]).replace("b'",'').replace(
-                                                "'",'').replace('12TB/in_vivo/tim',suffix))
+            reclength = self.load_reclength(temp_event_files[index].replace(
+                                                        '12TB/in_vivo/tim',suffix))
         except:
-            reclength = self.load_reclength(str(temp_event_files[index]).replace("b'",'').replace(
-                                                "'",'').replace('10TB/in_vivo/tim',suffix))
+            reclength = self.load_reclength(temp_event_files[index].replace(
+                                                        '10TB/in_vivo/tim',suffix))
 
         if reclength ==0:
             print ("zero length recording exiting (excitation light failure)", recording)
@@ -495,13 +501,11 @@ class EventTriggeredMaps():
         # n_sec_window = 10
         dff_method = 'globalAverage'
 
-        #
         locs_selected, locs_selected_with_lockout = self.get_04_triggers_with_lockout(root_dir,
                                                                                     recording,
                                                                                     lockout_window)
-        #
         if len(locs_selected)==0:
-            print (" ... session does not have lever pulls ", recording)
+            print (" ... session does not have lever pulls ")
             return
         
         # GENERATE SAVE FILENAMES FOR ALL CODE_04 DATA
@@ -513,6 +517,7 @@ class EventTriggeredMaps():
 
         # good idea to save these as text to see them after:
         np.savetxt(fname_04[:-4]+"_locs_selected.txt" , locs_selected)
+
 
         #if os.path.exists(fname_04)==False:
         self.generate_arrays_ROI_triggered(root_dir,
@@ -683,17 +688,6 @@ class EventTriggeredMaps():
                                      pca_denoise_flag):
 
         from tqdm import trange
-        if self.pca_etm:
-            fname_out_final =  fname_04[:-4]+"_pca_"+str(self.pca_explained_var_val)+".npy"
-            fname_out_random_final = fname_random[:-4]+"_pca_"+str(self.pca_explained_var_val)+".npy"
-
-            if os.path.exists(fname_out_final) and os.path.exists(fname_out_random_final):
-                return
-
-        else:
-            if os.path.exists(fname_04) and os.path.exists(fname_random):
-                return
-
 
         # Compute DFF
         data_stm = self.compute_DFF_function(
@@ -707,14 +701,58 @@ class EventTriggeredMaps():
         # return if DFF data is none
         if data_stm.shape[0]==0:
             print ("data_stm is empty (could not compute stm, skipping)", recording)
-            return
+            return np.zeros((0), 'float32'), np.zeros((0), 'float32')
+
+        # try to load transform coordinates to assess filter power
+        try:
+            transform = np.load(os.path.split(fname_04)[0]+"/transform.npy")
+        except:
+            # set dummy values so the filter power can be set to 1 below
+            transform = [0,  # xtranslate
+                         0,  # ytranslate
+                         0,  # rotation
+                         1,  # resizing
+                         1]  # power of filter
+
+        # Filter to remove midline artifacts etc.
+        if midline_filter_flag:
+
+            if use_fixed_filter_flag:
+                midline_filter = np.load(fname_filter,allow_pickle='True')
+                print ("using fixed filter")
+
+                # must also force the same filter on all the data;
+                transform = [0,  # xtranslate
+                             0,  # ytranslate
+                             0,  # rotation
+                             1,  # resizing
+                             1]  # power of filter
+
+            else:
+                midline_filter = self.compute_midline_filter(root_dir,
+                                              data_stm)
+                midline_filter.dump(fname_04[:-4]+ "_midline_filter.npy")
+
+            data_stm = self.correct_midline_artifact(data_stm,
+                                                midline_filter,
+                                                transform)  # pass in filter power value to decrease the amount of filtering if necessary
 
 
+
+
+        # check to see if data requires TRANSOFMRATIONS: rotations, etc.
+        if transform_data_flag:
+            try:
+                transform = np.load(os.path.split(fname_04)[0]+"/transform.npy")
+                data_stm = self.transform_data(transform, data_stm)
+            except:
+                print ("Transform coordinates missing ... skipping")
 
         # save data_stm stack
         if save_stm_flag:
             fname_04_data_stm = fname_04[:-4]+"_all_brain.npy"
             np.save(fname_04_data_stm, data_stm)
+
 
         # PCA denoising
         if self.pca_etm:
@@ -726,17 +764,26 @@ class EventTriggeredMaps():
                 pca = self.pca_object(data_stm)
 
                 # save the pca object for each dataset:
-                print (" ... saving pca: ", fname_pca)
+                print ("fname pca: ", fname_pca)
+
                 pk.dump(pca, open(fname_pca,"wb"))
+                np.save(fname_pca[:-4]+"_explained_variance.npy", expl_variance)
 
             else:
                 file = open(fname_pca, 'rb')
 
-                #
+                # dump information to that file
                 pca = pk.load(file)
 
-            # compute PCA denoised STM for regular data;
+                expl_variance = pca.explained_variance_
+                expl_variance = expl_variance/expl_variance.sum(0)
+                # print ("explained variance: ", expl_variance)
+
+                # denoise data using pca object; also use it below
+
+            # compute
             pca_etm = self.get_pca_filters(pca, data_stm)
+            #np.save(fname_04[:-4]+ "_area_ids.npy", area_ids)
             np.save(fname_04[:-4]+"_pca_"+str(self.pca_explained_var_val)+".npy", pca_etm)
 
         # compute ROI based etms
@@ -753,8 +800,7 @@ class EventTriggeredMaps():
             # input data shape: [# trials, # times, width, height]
             area_ids, trial_courses = self.sum_pixels_in_registered_mask(data_stm, maskwarp)
 
-            # save area ids, time courses for event triggered and random data
-            np.save(fname_04[:-4]+ "_area_ids.npy", area_ids)
+
 
         ########################################################
         ########## COMPUTE CONTROL/RANDOM DATA #################
@@ -762,7 +808,7 @@ class EventTriggeredMaps():
         # generate random time corses
         locs_selected = np.float32(np.linspace(30, 1100, data_stm.shape[0]))
         locs_selected = locs_selected + np.random.rand(locs_selected.shape[0])*10-5
-        data_stm = None # zero out data_stm
+        data_stm = None
 
 
         # DFF for random data
@@ -775,22 +821,22 @@ class EventTriggeredMaps():
                                 )
 
         if data_stm_random is None:
-            return
+            return np.zeros((0), 'float32'), np.zeros((0), 'float32')
 
-        # # use the same filter as in the event triggered neural activity
-        # if midline_filter_flag:
-        #     data_stm_random = self.correct_midline_artifact(data_stm_random,
-        #                                                midline_filter,
-        #                                                transform)
-        #
-        # # transform random data: rotations, etc.
-        # # check to see if data requires TRANSOFMRATIONS: rotations, etc.
-        # if transform_data_flag:
-        #     try:
-        #         transform = np.load(os.path.split(fname_04)[0]+"/transform.npy")
-        #         data_stm_random = self.transform_data(transform, data_stm_random)
-        #     except:
-        #         print ("Transform coordinates missing ... skipping")
+        # use the same filter as in the event triggered neural activity
+        if midline_filter_flag:
+            data_stm_random = self.correct_midline_artifact(data_stm_random,
+                                                       midline_filter,
+                                                       transform)
+
+        # transform random data: rotations, etc.
+        # check to see if data requires TRANSOFMRATIONS: rotations, etc.
+        if transform_data_flag:
+            try:
+                transform = np.load(os.path.split(fname_04)[0]+"/transform.npy")
+                data_stm_random = self.transform_data(transform, data_stm_random)
+            except:
+                print ("Transform coordinates missing ... skipping")
 
 
         # pca denoise
@@ -813,17 +859,17 @@ class EventTriggeredMaps():
             if trial_courses.shape[0]==0 or trial_courses_random.shape[0]==0:
                 return np.zeros((0), 'float32'), np.zeros((0), 'float32')
 
-            # remove infinities from both trial and randomized data
+            # remove infiities
             trial_courses_fixed, trial_courses_random_fixed = self.fix_trials(trial_courses,
                                                                               trial_courses_random)
-            np.save(fname_random, trial_courses_random_fixed)
+            # save area ids, time courses for event triggered and random data
+            np.save(fname_04[:-4]+ "_area_ids.npy", area_ids)
             np.save(fname_04, trial_courses_fixed)
+            np.save(fname_random, trial_courses_random_fixed)
 
         # return trial_courses_fixed, trial_courses_random_fixed
 
     def get_pca_filters(self, pca, data_stm):
-
-        # compute # of components needed for reconsturction to the requierd limit
         expl_variance = pca.explained_variance_
         expl_variance = expl_variance/expl_variance.sum(0)
         sums = 0
@@ -836,9 +882,7 @@ class EventTriggeredMaps():
         X = data_stm.reshape(data_stm.shape[0]*data_stm.shape[1],
                              data_stm.shape[2]*data_stm.shape[3])
         time_filters = pca.transform(X)[:,:nComp]
-        pca_time_filters_only = time_filters.reshape(data_stm.shape[0],
-                                                     data_stm.shape[1],
-                                                     -1).transpose(0,2,1)
+        pca_time_filters_only = time_filters.reshape(data_stm.shape[0], data_stm.shape[1],-1).transpose(0,2,1)
 
         return pca_time_filters_only
 
@@ -995,7 +1039,7 @@ class EventTriggeredMaps():
                      selected_sessions = selected_sessions_animal,
                      best_sessions = best_sessions_animal)
 
-    def pca_object(self, data_stm):
+    def pca_object(data_stm):
 
         X = data_stm.reshape(data_stm.shape[0]*data_stm.shape[1],
                              data_stm.shape[2]*data_stm.shape[3])
@@ -1011,7 +1055,7 @@ class EventTriggeredMaps():
 
         return pca
 
-    def pca_denoise(self, data_stm, nComp, pca):
+    def pca_denoise(data_stm, nComp, pca):
 
         X = data_stm.reshape(data_stm.shape[0]*data_stm.shape[1],
                              data_stm.shape[2]*data_stm.shape[3])
@@ -1070,7 +1114,6 @@ class EventTriggeredMaps():
             print ("PROCESSING: ", name)
 
             if parallel:
-                print ("TO IMPLMENET SELECTED SESSIONS IN PARALLEL")
                 res = parmap.map(self.compute_trial_courses_ROI_code04_trigger,
                                    recordings,
                                    root_dir,
@@ -1090,7 +1133,7 @@ class EventTriggeredMaps():
                 for recording in tqdm(recordings):
 
                     if  self.sessions in recording or self.sessions=='all':
-                        #print ("recording: ", recording)
+                        print ("recording: ", recording)
                     #
                         self.compute_trial_courses_ROI_code04_trigger(recording,
                                                                root_dir,

@@ -5,15 +5,19 @@ from matplotlib import gridspec
 import parmap
 import numpy as np
 import os
-import cv2
-
 import glob2
 
 from sklearn.svm import SVC # "Support vector classifier"
 import matplotlib.patches as mpatches
 
 
-class PredictSVM():
+
+class PredictSVMTime():
+
+    def __init__(self):
+        pass
+
+class PredictSVMChoice():
 
     def __init__(self):
         pass
@@ -294,7 +298,11 @@ class PredictSVM():
 
             self.sessions = final_session
 
-
+        # fix binary string files issues; remove 'b and ' from file names
+        for k in range(len(self.sessions)):
+            self.sessions[k] = str(self.sessions[k]).replace("'b",'').replace("'","")
+            if self.sessions[k][0]=='b':
+                self.sessions[k] = self.sessions[k][1:]
 
     def predictSVM(self):
 
@@ -313,6 +321,21 @@ class PredictSVM():
 
 
         for s in range(len(self.sessions)):
+            # make fname out for animal + session
+            fname_out = os.path.join(self.root_dir, self.animal_id,
+                                 'SVM_Scores',
+                                 'SVM_Scores_'+
+                                 self.sessions[s]+'_'+
+                                 self.code+
+                                 prefix1+
+                                 '_trial_ROItimeCourses_'+
+                                 str(self.window)+'sec'+
+                                 prefix2+
+                                 '.npy'
+                                 )
+
+            if os.path.exists(fname_out):
+                continue
 
             fname = os.path.join(self.root_dir, self.animal_id,'tif_files',
                                  self.sessions[s],
@@ -325,10 +348,13 @@ class PredictSVM():
                                  '.npy'
                                  )
             #
-            print ("FNAME: ", fname)
-            trial_courses_fixed = np.load(fname)
-            trial_courses_random_fixed = np.load(fname.replace('trial','random'))
-
+            #print ("  ... processing: ", os.path.split(fname)[1])
+            try:
+                trial_courses_fixed = np.load(fname)
+                trial_courses_random_fixed = np.load(fname.replace('trial','random'))
+            except:
+                print (" ....file not found, skippping ")
+                continue
             # cross validation; slides through the data and makes as many 80% batches as possible:
             #  E.g. if 65 trials, 80% is 52, so we can get 14 different batches
             # ratio of testing 80% train to 20% test is fixed inside function
@@ -343,34 +369,37 @@ class PredictSVM():
             except:
                 pass
 
-            # 
-            if True:
-                times = np.arange(0,trial_courses_fixed.shape[2])
-                if self.parallel:
-                    res = parmap.map(self.parallel_svm_multiple_tests2,
-                                     times,
-                                     self.sliding_window,
-                                     trial_courses_fixed,
-                                     trial_courses_fixed_ids, # ids of trial sto be used; make sure
-                                     trial_courses_random_fixed,
-                                     trial_courses_random_fixed_ids,
-                                     self.random_flag,
-                                     root_dir+'/analysis/',
-                                     pm_processes=self.n_cores,
-                                     pm_pbar=True)
-                else:
-                    for k in range(len(times)):
-                        self.parallel_svm_multiple_tests2(times[k],
-                                     self.sliding_window,
-                                     trial_courses_fixed,
-                                     trial_courses_fixed_ids, # ids of trial sto be used; make sure
-                                     trial_courses_random_fixed,
-                                     trial_courses_random_fixed_ids,
-                                     self.random_flag,
-                                     root_dir+'/analysis/')
-                print ("DONE")
+            # exclude small # of trial data
+            if trial_courses_fixed.shape[0]<=1:
+                print ("  Insuffciient trials, exiting...")
+                continue
 
 
+
+            #
+            times = np.arange(0,trial_courses_fixed.shape[2])
+            if self.parallel:
+                res = parmap.map(self.parallel_svm_multiple_tests2,
+                                 times,
+                                 self.sliding_window,
+                                 trial_courses_fixed,
+                                 trial_courses_fixed_ids, # ids of trial sto be used; make sure
+                                 trial_courses_random_fixed,
+                                 trial_courses_random_fixed_ids,
+                                 self.random_flag,
+                                 root_dir+'/analysis/',
+                                 pm_processes=self.n_cores,
+                                 pm_pbar=True)
+            else:
+                for k in range(len(times)):
+                    self.parallel_svm_multiple_tests2(times[k],
+                                 self.sliding_window,
+                                 trial_courses_fixed,
+                                 trial_courses_fixed_ids, # ids of trial sto be used; make sure
+                                 trial_courses_random_fixed,
+                                 trial_courses_random_fixed_ids,
+                                 self.random_flag,
+                                 root_dir+'/analysis/')
 
             # collect data
             fnames = np.sort(glob2.glob(root_dir+'/analysis/'+"*accuracy.npy"))
@@ -385,20 +414,7 @@ class PredictSVM():
                 os.mkdir(os.path.join(self.root_dir, self.animal_id, "SVM_Scores"))
             except:
                 pass
-            
-            # make fname out for animal + session
-            fname_out = os.path.join(self.root_dir, self.animal_id,
-                                 'SVM_Scores',
-                                 'SVM_Scores_'+
-                                 self.sessions[s]+'_'+
-                                 self.code+
-                                 prefix1+
-                                 '_trial_ROItimeCourses_'+
-                                 str(self.window)+'sec'+
-                                 prefix2+
-                                 '.npy'
-                                 )
 
             np.save(fname_out,data_out)
 
-        print ("DONE predicting SVM ...")
+        print ("DONE predicting SVM on animal: ", self.animal_id)
