@@ -25,6 +25,7 @@ import tensorflow as tf
 physical_devices = tf.config.list_physical_devices('GPU')
 tf.config.experimental.set_memory_growth(physical_devices[0], True)
 
+from tqdm import trange
 #
 from tensorflow import keras
 from tensorflow.keras import layers
@@ -39,6 +40,8 @@ import os
 class PredictRNN():
 
     def __init__(self):
+
+        self.code = 'code_04'
 
         pass
 
@@ -88,9 +91,7 @@ class PredictRNN():
         self.X = X
 
 
-    def model_run(self, lr, epochs, X_train_R, y_train_R, X_test_R, y_test_R,verbose):
-
-
+    def model_run(self, lr, epochs, X_train_R, y_train_R, X_test_R, y_test_R, verbose):
 
         #
         n_timesteps, n_features, n_outputs = X_train_R.shape[1], X_train_R.shape[2], 1 #y_train.shape[1]
@@ -103,18 +104,70 @@ class PredictRNN():
                                           tf.keras.layers.Dense(n_outputs,activation='sigmoid')
                                         ])
         #
-        opt = tf.keras.optimizers.Adam(lr=lr)
+        opt = tf.keras.optimizers.Adam(lr=self.learning_rate)
 
         #
         model.compile(loss='binary_crossentropy', optimizer=opt, metrics=['accuracy'])
 
         #
-        history=model.fit(X_train_R, y_train_R, epochs=epochs,
-                      validation_data=(X_test_R, y_test_R),batch_size=5,verbose=verbose)
+        history=model.fit(X_train_R,
+                          y_train_R,
+                          epochs=self.epochs,
+                          validation_data=(X_test_R, y_test_R),
+                          batch_size=1000,
+                          verbose=verbose)
 
         #
         acc=history.history['val_accuracy']
         return history, acc
+
+
+
+    def get_fname(self): # load ordered sessions from file
+
+        self.sessions = np.load(os.path.join(self.main_dir, self.animal_id,'tif_files.npy'))
+
+        data = []
+        for k in range(len(self.sessions)):
+            data.append(os.path.split(self.sessions[k])[1][:-4])
+        self.sessions = data
+
+        #
+        final_session = []
+        for k in range(len(self.sessions)):
+            if str(self.session_id) in str(self.sessions[k]):
+
+                final_session = self.sessions[k]
+                break
+
+        self.session = final_session
+
+        print ("self session: ", self.session)
+
+        # select data with or without lockout
+        prefix1 = ''
+        if self.lockout:
+            prefix1 = '_lockout_'+str(self.lockout_window)+"sec"
+
+        # select data with pca compression
+        prefix2 = ''
+        if self.pca_flag:
+            prefix2 = '_pca_'+str(self.pca_var)
+
+        # make fname out for animal + session
+        fname = os.path.join(self.main_dir, self.animal_id,
+                             'SVM_Scores',
+                             'SVM_Scores_'+
+                             self.session+"_"+
+                             self.code+
+                             prefix1+
+                             '_trial_ROItimeCourses_'+
+                             str(self.window)+'sec'+
+                             prefix2+
+                             '.npy'
+                             )
+        self.fname = fname
+
 
     def run(self):
 
@@ -123,20 +176,27 @@ class PredictRNN():
                    random_state=None,
                    shuffle=True)
 
+
+        #
+        self.learning_rate = 0.0001
+
+        #
+        self.epochs = 200
+
+
         #
         b_rnn=[]
-        for i in range(0,571,30):
+        for i in trange(0,571,30):
           kt_X=self.X[:,i:i+30,:]  # this is a chunk window data grabber;
           acc_rnn_s=np.zeros(10)
           s=0
           for train_index, test_index in kf.split(kt_X):
-              print("Train:", train_index, "Validation:",test_index)
+              #print("Train:", train_index, "Validation:",test_index)
               X_train_k, X_test_k = kt_X[train_index], kt_X[test_index]
               y_train_k, y_test_k = self.y[train_index], self.y[test_index]
               #print(" y_train_kF: ", y_train_kF)
 
-              history, acc = self.model_run(0.0001,
-                                         200,
+              history, acc = self.model_run(
                                          X_train_k,
                                          y_train_k,
                                          X_test_k,
@@ -151,7 +211,10 @@ class PredictRNN():
         a_s=np.mean(b_rnn,axis=1)
         c_s=np.std(b_rnn,axis=1)/(10**0.5)
 
-        np.savez('/home/cat/acc_rnn.npy',
+        fname_out = os.path.join(self.main_dir, self.animal_id,'RNN_scores',
+                                 self.session_id+str(self.epochs)+"_"+str(self.learning_rate)+'.npy')
+
+        np.savez(fname_out,
                  b_rnn = b_rnn,
                  a_s = a_s,
                  c_s = c_s)
