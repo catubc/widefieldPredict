@@ -9,6 +9,8 @@ import matplotlib.pyplot as plt
 import glob2
 import scipy
 from tqdm import trange
+from statsmodels.stats.multitest import multipletests
+from scipy.optimize import curve_fit
 
 from scipy import stats
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
@@ -21,6 +23,9 @@ class Visualize():
 
         #
         self.animal_ids = ['IA1','IA2','IA3','IJ1','IJ2','AQ2']
+
+        #
+        self.labels = ["M1", "M2", "M3", "M4","M5",'M6']
 
         #
         self.colors = ['black','blue','red','green','magenta','pink','cyan']
@@ -37,6 +42,9 @@ class Visualize():
         #
         self.cbar_offset = 0
 
+        #
+        self.imaging_rate = 30.
+
 
     def load_data(self, fname):
 
@@ -48,7 +56,7 @@ class Visualize():
         ''' Formats plots for decision choice with 50% and 0 lines
         '''
        # meta data
-        xlims = [-10,10]
+        xlims = [-self.window+1,0]
         ylims = [0.4,1.0]
         ax.plot([0,0],
                  [ylims[0],ylims[1]],
@@ -64,7 +72,7 @@ class Visualize():
                  color='black',
                 alpha=.5)
 
-        ax.set_xlim(-10,10)
+        ax.set_xlim(xlims[0],xlims[1])
         ax.set_ylim(0.4,1.0)
 
 
@@ -104,14 +112,19 @@ class Visualize():
         self.sessions = data
 
         #
-        final_session = []
+        self.session = None
+        # print (self.session_id)
         for k in range(len(self.sessions)):
             if str(self.session_id) in str(self.sessions[k]):
-
-                final_session = self.sessions[k]
+                self.session = self.sessions[k]
                 break
 
-        self.session = final_session
+        #
+        if self.session is None:
+            print (" COULDN't FIND SESSION...")
+            self.fname = None
+            return
+
 
         # select data with or without lockout
         prefix1 = ''
@@ -123,41 +136,85 @@ class Visualize():
         if self.pca_flag:
             prefix2 = '_pca_'+str(self.pca_var)
 
+        # print ("self.session: ", self.session)
         # make fname out for animal + session
+        # fname = os.path.join(self.main_dir, self.animal_id,
+        #                      'SVM_Scores',
+        #                      'SVM_Scores_'+
+        #                      self.session+#"_"+
+        #                      self.code+
+        #                      prefix1+
+        #                      '_trial_ROItimeCourses_'+
+        #                      str(self.window)+'sec'+
+        #                      prefix2+
+        #                      '.npy'
+        #                      )
+
+        #
         fname = os.path.join(self.main_dir, self.animal_id,
-                             'SVM_Scores',
-                             'SVM_Scores_'+
-                             self.session+"_"+
-                             self.code+
-                             prefix1+
-                             '_trial_ROItimeCourses_'+
-                             str(self.window)+'sec'+
-                             prefix2+
-                             '.npy'
-                             )
+                     'SVM_Scores',
+                     'SVM_Scores_'+
+                     self.session+#"_"+
+                     self.code+
+                     prefix1+
+                     '_trial_ROItimeCourses_'+
+                     str(self.window)+'sec_'+
+                     "Xvalid"+str(self.xvalidation)+
+                     "_Slidewindow"+str(self.sliding_window)+
+                     #prefix2+
+                     '.npz'
+                     )
+
         self.fname = fname
 
     def get_number_of_trials(self):
 
+        # convert wild card file name into correct filename for animal
+        main_dir = os.path.join(self.main_dir,
+                                 self.animal_id,
+                                 'tif_files')
+        session_corrected = os.path.split(
+                            glob2.glob(main_dir+"/*"+self.session_id+"*")[0])[1]
+        #print ("Session corrected: ", session_corrected)
+
+
+        # check to see if session done
         fname_txt = os.path.join(self.main_dir,
                                  self.animal_id,
                                  'tif_files',
-                                 self.session_id,
-                                 self.session_id+"_all_locs_selected.txt")
+                                 # self.session_id,
+                                 # self.session_id+
+                                 session_corrected,
+                                 session_corrected+
+                                 "_all_locs_selected.txt")
 
         if os.path.exists(fname_txt)==False:
+            # print ("missing all locs file: ", fname_txt)
             self.n_trials = 0
             self.n_trials_lockout = 0
             return
 
-        self.n_trials = np.loadtxt(fname_txt).shape[0]
+        # check to see if lokcout or no lockout
+        if self.lockout==False:
+            self.n_trials = np.loadtxt(fname_txt).shape[0]
+        else:
+            fname_txt = os.path.join(self.main_dir,
+                                     self.animal_id,
+                                     'tif_files',
+                                     session_corrected,
+                                     session_corrected+"_lockout_"+
+                                     str(self.lockout_window)+
+                                     "sec_locs_selected.txt")
 
-        fname_txt = os.path.join(self.main_dir,
-                                 self.animal_id,
-                                 'tif_files',
-                                 self.session_id,
-                                 self.session_id+"_lockout_10sec_locs_selected.txt")
-        self.n_trials_lockout = np.loadtxt(fname_txt).shape[0]
+            if os.path.exists(fname_txt)==False:
+                print ("missing lockout file: ", fname_txt)
+                self.n_trials = 0
+                self.n_trials_lockout = 0
+                return
+
+            self.n_trials = np.loadtxt(fname_txt).shape[0]
+
+        # print ("Loaded # trials: ", self.n_trials)
 
     def plot_decision_choice_all(self):
 
@@ -264,40 +321,54 @@ class Visualize():
 
     def process_session(self):
 
+        #
+        data = np.load(self.fname, allow_pickle=True)
+        self.data = data['accuracy']
+
+        # grab only first half:
+        self.data = self.data[:(self.data.shape[0]+
+                                self.sliding_window)//2]
+
+        print ("LOADED: DATA" , self.data.shape)
+
         # get n trials for both lockout and all trials data
         self.get_number_of_trials()
+        #print (" post trials data size ", self.data.shape)
 
         #
         if self.n_trials<self.min_trials:
+            print ("Insufficient trials...", self.n_trials)
             self.data = np.zeros((0))
             return
 
         # gets the corect filename to be loaded below
         self.get_fname()
+        print (" post fname: ", self.data.shape)
 
         #
         if os.path.exists(self.fname)==False:
+            print ("missing: ", self.fname)
             self.data = np.zeros((0))
             return
-        self.data = np.load(self.fname)
 
         #
         mean = self.data.mean(1)
+
         #
         if self.smooth_window is not None:
-            mean = self.filter_trace(mean)
+            #mean = self.filter_trace(mean)
             data = []
             for k in range(self.data.shape[1]):
                 data.append(self.filter_trace(self.data[:,k]))
             self.data = np.array(data).copy().T
 
+            mean = self.data.mean(1)
+
+        #
         self.mean = mean
 
         #
         self.std = np.std(self.data, axis=1)
-
-
-
 
     def plot_decision_choice(self, clr, label, ax=None):
 
@@ -327,6 +398,9 @@ class Visualize():
 
     def compute_significance(self):
 
+        print ("self.data: ", self.data.shape)
+
+        #
         sig = []
         for k in range(self.data.shape[0]):
             #res = stats.ks_2samp(self.data[k],
@@ -338,7 +412,20 @@ class Visualize():
 
             sig.append(res[1])
 
+
+        self.sig_save = np.array(sig).copy()
+        print ("Self sig save: ", self.sig_save.shape)
+
+        # multiple hypothesis test
+        temp = np.array(sig)
+        print ("data into multi-hypothesis tes:", temp.shape)
+        temp2 = multipletests(temp, alpha=self.significance, method='fdr_bh')
+        sig = temp2[1]
+
+        #
         sig=np.array(sig)[None]
+
+        #
         thresh = self.significance
         idx = np.where(sig>thresh)
         sig[idx] = np.nan
@@ -347,54 +434,74 @@ class Visualize():
         idx = np.where(self.mean<0.5)
         sig[:,idx] = np.nan
 
-        #
-        self.sig =sig[:,:sig.shape[1]//2]
+        # use only first half
+        self.sig =sig #[ :,:sig.shape[1]//2]
+        print ("Final sig: ", self.sig.shape)
 
-    def compute_first_decoding_time(self):
+
+    def compute_first_decoding_time(self, lockouts=[False, True]):
 
         #
-        lockouts = [False, True]
+        #if lockouts = [False, True]
         for lockout in lockouts:
             self.lockout=lockout
 
             all_res_continuous = []
             all_res_earliest = []
-            times = []
+            all_session_nos = []
+            all_session_names = []
+            all_n_trials = []
+            all_sigs = []
 
             #
             for a in trange(len(self.animal_ids)):
                 res_continuous = []
                 res_earliest = []
-                t = []
+                session_nos = []
+                session_names = []
+                n_trials = []
+                sigs = []
 
                 #
                 self.animal_id = self.animal_ids[a]
-                self.get_sessions()
 
+                #
+                self.get_sessions()
                 #
                 for p in range(len(self.session_ids)):
                     self.session_id = self.session_ids[p]
+
+                    #
                     self.process_session()
+                    # print ("a: ", a, self.session_id, self.data.shape)
                     #
                     if self.data.shape[0] == 0:
                         continue
 
                     # compute significance
                     self.compute_significance()
+
+                    # save all the significant vals;
+                    sigs.append(self.sig_save)
+
+                    #
                     self.sig = self.sig.squeeze()
 
-                    # find continous period earliest
+                    # find earliest period of significance, going back in time;
                     for k in range(self.sig.shape[0]-1,0,-1):
                         if np.isnan(self.sig[k])==True:
                             break
 
-                    temp = -10+k/30.
+                    #
+                    temp = -self.window+k/self.imaging_rate
 
-                    # Exclude one of the weird datapoints
+                    # Exclude one of the weird datapoint from the AQ2? session
                     if temp>0:
                         #print ("n trials: ", self.n_trials, a,
                         #       p, temp, self.session_id, self.sig.shape)
                         continue
+
+                    #
                     res_continuous.append(temp)
 
                     # find aboslute earliest
@@ -402,38 +509,94 @@ class Visualize():
                     for k in range(self.sig.shape[0]-1,0,-1):
                         if np.isnan(self.sig[k])==True:
                             k_earliest = k
-                    res_earliest.append(-10+k_earliest/30.)
+                    res_earliest.append(-self.window+k_earliest/self.imaging_rate)
 
                     #
-                    t.append(p)
+                    session_nos.append(p)
+
+                    #
+                    session_names.append(self.session_id)
+
+                    #
+                    n_trials.append(self.n_trials)
 
                 # save data
                 all_res_continuous.append(res_continuous)
                 all_res_earliest.append(res_earliest)
-                times.append(t)
+                all_session_nos.append(session_nos)
+                all_session_names.append(session_names)
+                all_n_trials.append(n_trials)
+                all_sigs.append(sigs)
 
             if lockout==False:
-                np.save('/home/cat/all_cont.npy', all_res_continuous)
-                np.save('/home/cat/all_earliest.npy', all_res_earliest)
-                np.save('/home/cat/times.npy', times)
-
+                np.savez(self.main_dir+'/first_decoding_time'+
+                         "_minTrials"+str(self.min_trials)+
+                         '_all_'+
+                         str(self.window)+'sec.npz',
+                         all_res_continuous = all_res_continuous,
+                         all_res_earliest = all_res_earliest,
+                         all_session_nos = all_session_nos,
+                         all_session_names = all_session_names,
+                         all_n_trials = all_n_trials,
+                         all_sigs = all_sigs
+                         )
             else:
-                np.save('/home/cat/all_cont_lockout.npy', all_res_continuous)
-                np.save('/home/cat/all_earliest_lockout.npy', all_res_continuous)
+                np.savez(self.main_dir+'/first_decoding_time'+
+                         "_minTrials"+str(self.min_trials)+
+                         '_lockout_'+
+                         str(self.window)+'sec.npz',
+                         all_res_continuous = all_res_continuous,
+                         all_res_earliest = all_res_earliest,
+                         all_session_nos = all_session_nos,
+                         all_session_names = all_session_names,
+                         all_n_trials = all_n_trials,
+                         all_sigs = all_sigs
+                         )
 
 
-    def plot_first_decoding_time(self):
-        labels = ["M1", "M2", "M3", "M4","M5",'M6']
+    def plot_first_decoding_time(self, return_ids_threshold=None):
 
         # flag to search for any signfiicant decoding time, not just continous ones
         earliest = False
 
         if earliest==False:
-            all_res_continuous_all = np.load('/home/cat/all_cont.npy', allow_pickle=True)
-            all_res_continuous_lockout = np.load('/home/cat/all_cont_lockout.npy', allow_pickle=True)
+
+            data = np.load(self.main_dir+'/first_decoding_time'+
+                         "_minTrials"+str(self.min_trials)+
+                         '_all_'+
+                         str(self.window)+'sec.npz',
+                         allow_pickle=True)
+            all_res_continuous_all = data['all_res_continuous']
+            all_session_names = data['all_session_names']
+            all_session_nos = data['all_session_nos']
+
+            data = np.load(self.main_dir+'/first_decoding_time'+
+                         "_minTrials"+str(self.min_trials)+
+                         '_lockout_'+
+                         str(self.window)+'sec.npz',
+                         allow_pickle=True)
+            all_res_continuous_lockout = data['all_res_continuous']
+            try:
+                all_session_names_lockout = data['all_session_names']
+            except:
+                pass
+            #all_n_trials = data['all_n_trials']
         else:
-            all_res_continuous_all = np.load('/home/cat/all_earliest.npy', allow_pickle=True)
-            all_res_continuous_lockout = np.load('/home/cat/all_earliest_lockout.npy', allow_pickle=True)
+            print ("Data missing, skip")
+            return
+
+        if return_ids_threshold is not None:
+            for k in range(len(all_res_continuous_all)):
+                idx = np.where(np.array(all_res_continuous_all[k])<=return_ids_threshold)[0]
+                if idx.shape[0]>0:
+                    print ("all: ", np.array(all_session_names[k])[idx])
+                    print ("all: ", np.array(all_session_nos[k])[idx])
+
+            for k in range(len(all_res_continuous_lockout)):
+                idx = np.where(np.array(all_res_continuous_lockout[k])<=return_ids_threshold)[0]
+                if idx.shape[0]>0:
+                    print ("lockout: ", np.array(all_session_names[k])[idx])
+                    print ("lockout: ", np.array(all_session_nos[k])[idx])
 
         #
         data_sets_all = []
@@ -445,9 +608,8 @@ class Visualize():
             data_sets_lockout.append(all_res_continuous_lockout[k])
 
         # Computed quantities to aid plotting
-
-        hist_range = (-10,0)
-        bins = np.arange(-10,0,1)
+        hist_range = (-self.window,1)
+        bins = np.arange(-self.window,1,1)
 
         #
         binned_data_sets_all = [
@@ -480,47 +642,257 @@ class Visualize():
             ax.barh(centers, binned_data_lockout, height=heights, left=lefts, color='blue')
 
         ax.set_xticks(x_locations)
-        ax.set_xticklabels(labels)
+        ax.set_xticklabels(self.labels)
         ax.set_xlim(-20,spacing*6)
-        ax.set_ylim(-10.5,0)
-
-
+        ax.set_ylim(-self.window-0.5,0)
         ax.set_ylabel("Data values")
         ax.set_xlabel("Data sets")
 
+    def exp_func(self, x, a, b, c, d):
+        return a*np.exp(-c*(x-b))+d
 
-    def plot_significant(self, fig, clr, label):
+    def fit_exp(self, all_preds,
+                all_trials,
+                ax):
+
+        # fit exponentials
+        all_preds = np.array(all_preds)
+        offset = 10
+        popt, pcov = curve_fit(self.exp_func,
+                               all_preds+offset,
+                               all_trials,
+                               [offset,1e-6,0.001,0])
+
+        #print("Popt: ", popt)
+        time_back = -20
+        x= np.linspace(time_back,offset,1000)
+        ax.plot(x+time_back+offset,self.exp_func(x,*popt),
+                 linewidth=5, c='black')
+
+    def fit_line(self, all_preds,
+                all_trials,
+                color,
+                ax):
+
+        from sklearn import datasets, linear_model
+
+        # Create linear regression object
+        regr = linear_model.LinearRegression()
 
         #
-        ax=plt.subplot(111)
+        print (self.animal_id, self.session, all_preds)
 
-        # load data
+        #
+        all_preds = np.array(all_preds)[:,None]
+        print ("all preds: ", all_preds.shape)
+        all_trials = np.array(all_trials)
+        regr.fit(all_preds, all_trials)
+
+        # Make predictions using the testing set
+        x_test = np.arange(-self.window,0.5,1)[:,None]
+        y_test = regr.predict(x_test)
+
+        #
+        ax.plot(x_test, y_test,
+                 color=color,
+                 linewidth=3)
+
+
+    def plot_first_decoding_time_vs_n_trials(self):
+        #labels = ["M1", "M2", "M3", "M4","M5",'M6']
+
+        # flag to search for any signfiicant decoding time, not just continous ones
+        earliest = False
+
+        if earliest==False:
+            # data = np.load(self.main_dir + '/first_decoding_time_all_'+str(self.window)+
+            #                'sec.npz',allow_pickle=True)
+            data = np.load(self.main_dir+'/first_decoding_time'+
+                         "_minTrials"+str(self.min_trials)+
+                         '_all_'+
+                         str(self.window)+'sec.npz',
+                         allow_pickle=True)
+
+
+            res_continuous_all = data['all_res_continuous']
+            all_n_trials = data['all_n_trials']
+
+            data = np.load(self.main_dir+'/first_decoding_time'+
+                         "_minTrials"+str(self.min_trials)+
+                         '_lockout_'+
+                         str(self.window)+'sec.npz',
+                         allow_pickle=True)
+            res_continuous_lockout = data['all_res_continuous']
+            lockout_n_trials = data['all_n_trials']
+        else:
+            print ("Data not found, skipping")
+            return
+
+        #
+        fig = plt.figure()
+        all_preds = []
+        all_trials = []
+        import matplotlib.patches as mpatches
+
+        for k in range(len(res_continuous_all)):
+            ax=plt.subplot(2,3,k+1)
+            plt.ylim(0,200)
+            plt.xlim(-self.window,0)
+            plt.xticks([])
+            plt.yticks([])
+
+            trials1 = np.array(all_n_trials[k])
+            predictions1 = np.array(res_continuous_all[k])
+            if predictions1.shape[0]<=1:
+                continue
+
+            #
+            #print ("Predictiosn1: ", perdictions1.shape)
+            plt.scatter(predictions1,
+                        trials1,
+                        s=100,
+                        c=np.arange(trials1.shape[0])+20,
+                        edgecolors='black',
+                        cmap=cm.Greys)
+
+            #
+            #all_preds.extend(self.predictions1)
+            #all_trials.extend(self.trials1)
+
+            #self.fit_exp(all_preds, all_trials, ax)
+            self.fit_line(predictions1,
+                          trials1,
+                          'black',
+                          ax)
+
+            #
+            corr_pred_trials = scipy.stats.pearsonr(predictions1, trials1)
+            corr_pred_time = scipy.stats.pearsonr(predictions1,
+                                                  np.arange(len(predictions1)))
+
+
+            # LOCKOUT TRIALS
+            trials2 = np.array(lockout_n_trials[k])
+            print ("lockout trials2: ", trials2)
+            predictions2 = np.array(res_continuous_lockout[k])
+            corr_pred_trial_lockout = scipy.stats.pearsonr(predictions2, trials2)
+            corr_pred_time_lockout = scipy.stats.pearsonr(predictions2, np.arange(len(predictions2)))
+
+            from decimal import Decimal
+            patches = []
+            patches.append(mpatches.Patch(color='black',
+                                       label='all vs. # trials: '+
+                                       str(round(corr_pred_trials[0],2))+
+                                       " ("+str("pval: {0:.1}".format(corr_pred_trials[1]))+")"
+                                          ))
+            patches.append(mpatches.Patch(color='grey',
+                                       label='all vs. time: '+
+                                       str(round(corr_pred_time[0],2))+
+                                       " ("+str("pval: {0:.1}".format(corr_pred_time[1]))+")"
+                                        ))
+            patches.append(mpatches.Patch(color='blue',
+                                       label='lockout vs. # trials: '+
+                                       str(round(corr_pred_trial_lockout[0],2))+
+                                       " ("+str("pval: {0:.1}".format(corr_pred_trial_lockout[1]))+")"
+                                      ))
+
+            patches.append(mpatches.Patch(color='lightblue',
+                                       label='lockout vs. time: '+
+                                       str(round(corr_pred_time_lockout[0],2))+
+                                       " ("+str("pval: {0:.1}".format(corr_pred_time_lockout[1]))+")"
+                                      ))
+
+            plt.legend(handles=patches,
+                       fontsize=6)
+
+            plt.scatter(predictions2,
+                        trials2,
+                        s=100,
+                        c=np.arange(trials2.shape[0])+20,
+                        edgecolors='black',
+                        cmap=cm.Blues)
+
+            self.fit_line(predictions2,
+                          trials2,
+                          'blue',
+                          ax)
+
+
+            # select n_trials > 100 and connect them
+            idx = np.where(trials1>80)[0]
+            for p in idx:
+                try:
+                    plt.plot([predictions1[p], predictions2[p]],
+                         [trials1[p], trials2[p]],'r--')
+                except:
+                    pass
+
+
+
+        plt.suptitle("All sessions all trials")
+
+
+
+    def plot_significant(self, clr, label):
+
+        #
+        #ax=plt.subplot(111)
+
+        # get session name from ordered list; get
         self.get_fname()
-        self.data = np.load(self.fname)
+
+        #
+        if self.fname is None:
+            print ("exiting")
+            return
 
         #
         self.process_session()
+        print ("post process: ", self.data.shape)
+        #
+        #print ("self.mean:", self.mean)
+        t = np.linspace(-self.window+1, 0,
+                        self.mean.shape[0])
 
         #
-        t = np.linspace(-9.5, 9.5, self.mean.shape[0])
-
-        # plotting
         plt.plot(t,
                  self.mean,
                  c=clr,
                  label = label,
-                 linewidth=self.linewidth)
+                 linewidth=self.linewidth,
+                 alpha=self.alpha)
         plt.fill_between(t, self.mean-self.std, self.mean+self.std, color=clr, alpha = 0.2)
 
         # compute significance
         self.compute_significance()
+        # find earliest significant;
+        earliest_continuous = 0
+        #print ("self sig: ", self.sig.shape)
+        for k in range(self.sig.shape[1]-1,0,-1):
+            if self.sig[0][k]<=self.significance:
+                earliest_continuous = k
+            else:
+                break
 
+        print ("earliest: ", earliest_continuous,
+               " in sec: ", -(self.sig.shape[1]-earliest_continuous)/30.)
+
+
+        self.ax.annotate("EDT: "+str(round(-(self.sig.shape[1]-earliest_continuous)/30.,1))+"sec",
+                         xy=(-(self.sig.shape[1]-earliest_continuous)/30., 0.5),
+                         xytext=(-(self.sig.shape[1]-earliest_continuous)/30.-10, 0.7),
+                         arrowprops=dict(arrowstyle="->"),
+                         fontsize=20,
+                         color=clr)
+        x = -(self.sig.shape[1]-earliest_continuous)/30.
+        plt.fill_between([x,0], 0,1.0 ,
+                         color='grey',alpha=.2)
         # set
         vmin=0.0
         vmax=self.significance
 
         # plot significance
-        axins = ax.inset_axes((0,.95-self.cbar_offset,1,.05))
+        axins = self.ax.inset_axes((0,1-self.cbar_thick-self.cbar_offset,1,self.cbar_thick))
         axins.set_xticks([])
         axins.set_yticks([])
         im = axins.imshow(self.sig,
@@ -536,23 +908,126 @@ class Visualize():
         #fmt = '%1.4f'
         fmt='%.0e'
         #
-        cbar = fig.colorbar(im,
-                            ax=ax,
+        cbar = self.fig.colorbar(im,
+                            ax=self.ax,
                             shrink=0.2,
                             ticks=ticks,
                             format = fmt)
 
         cbar.ax.tick_params(labelsize=25)
-        #cbar.ax.set_title('Pval',
-                          #rotation=0,
-                          #pad=1.8,
-                          #fontsize=25)
 
-        self.format_plot(ax)
+        self.format_plot(self.ax)
         plt.title(self.animal_id + "  session: "+str(self.session))
 
         #
-        self.cbar_offset+=0.05
+        self.cbar_offset+=self.cbar_thick
+
+
+    def plot_significant_concatenated(self, clr, label):
+
+        #
+
+        #
+        data = np.load(self.fname, allow_pickle=True)
+        self.data=data['accuracy']
+        print ("loaded data: ", self.data.shape)
+
+        #
+        if self.smooth_window is not None:
+            #mean = self.filter_trace(mean)
+            data = []
+            for k in range(self.data.shape[1]):
+                data.append(self.filter_trace(self.data[:,k]))
+            self.data = np.array(data).copy().T
+
+        #
+        self.mean = self.data.mean(1)
+        self.std = np.std(self.data, axis=1)
+
+        #
+        t = np.linspace(-self.window+2, 0,
+                         self.mean.shape[0])
+
+        #
+        plt.plot(t,
+                 self.mean,
+                 c=clr,
+                 label = label,
+                 linewidth=self.linewidth,
+                 alpha=self.alpha)
+
+        plt.fill_between(t, self.mean-self.std, self.mean+self.std, color=clr, alpha = 0.2)
+
+        # compute significance
+        self.compute_significance()
+
+        # set
+        vmin=0.0
+        vmax=self.significance
+
+        # plot significance
+        axins = self.ax.inset_axes((0,1-self.cbar_thick-self.cbar_offset,1,self.cbar_thick))
+        axins.set_xticks([])
+        axins.set_yticks([])
+        im = axins.imshow(self.sig,
+                          vmin=vmin,
+                          vmax=vmax,
+                          aspect='auto',
+                          #cmap='viridis_r')
+                          cmap=self.cmap)
+
+        # find earliest significant;
+        earliest_continuous = 0
+        #print ("self sig: ", self.sig.shape)
+        for k in range(self.sig.shape[1]-1,0,-1):
+            if self.sig[0][k]<=self.significance:
+                earliest_continuous = k
+            else:
+                break
+
+        print ("earliest: ", earliest_continuous,
+               " in sec: ", -(self.sig.shape[1]-earliest_continuous)/30.)
+
+
+        self.ax.annotate("EDT: "+str(round(-(self.sig.shape[1]-earliest_continuous)/30.,1))+"sec",
+                         xy=(-(self.sig.shape[1]-earliest_continuous)/30., 0.5),
+                         xytext=(-(self.sig.shape[1]-earliest_continuous)/30.-12, 0.75+
+                                 self.title_offset),
+                         arrowprops=dict(arrowstyle="->",
+                                         lw=5),
+                         fontsize=20,
+                         color=clr)
+        x = -(self.sig.shape[1]-earliest_continuous)/30.
+
+        # plot significance region
+        plt.fill_between([x-1/33.,0], 0,1.0 ,
+                         color=clr,alpha=.2)
+
+
+        if self.cbar==True:
+
+            #
+            ticks = np.round(np.linspace(vmin, vmax, 4),8)
+            print ("vmin, vmax; ", vmin, vmax, "ticks: ", ticks)
+            #fmt = '%1.4f'
+            fmt='%.0e'
+
+
+            #
+            cbar = self.fig.colorbar(im,
+                                ax=self.ax,
+                                shrink=0.2,
+                                ticks=ticks,
+                                format = fmt)
+
+            cbar.ax.tick_params(labelsize=25)
+
+            self.format_plot(self.ax)
+            plt.title(self.animal_id + "  session: "+str(self.session))
+
+            #
+            self.cbar_offset+=self.cbar_thick
+
 
         #
 
@@ -665,6 +1140,7 @@ class Visualize():
         # load sessions in chronological order
         self.sessions = np.load(os.path.join(self.main_dir, self.animal_id,'tif_files.npy'))
 
+        #
         self.fnames_svm = []
         self.session_ids = []
         for k in range(len(self.sessions)):
@@ -684,8 +1160,6 @@ class Visualize():
                      '.npy'
                      )
             self.fnames_svm.append(fname)
-
-
 
 
     def plot_animal_time_longitudinal(self, animal_name):
@@ -976,3 +1450,47 @@ class Visualize():
         return trace_smooth
 
 
+    def compare_svm_rnn(self, fnames_svm, fnames_rnn):
+
+        #
+        ctr=1
+        for fname in fnames_rnn:
+            idx1 = fname.find('RNN_scores/')
+            idx2 = fname.find('_200')
+            session = fname[idx1+11:idx2]
+            for fname_svm in fnames_svm:
+                if session in fname_svm and 'trial' in fname_svm:
+                    data_svm = np.load(fname_svm)[:300]
+                    break
+
+            #
+            ax=plt.subplot(5, 10,ctr)
+            data_rnn = np.load(fname)['b_rnn']
+            t = np.linspace(-10,0,data_rnn.shape[0])
+            std = np.std(data_rnn,1)
+            mean = data_rnn.mean(1)
+            plt.plot(t, mean, c='black')
+            plt.fill_between(t, mean+std, mean-std, color='black', alpha=.2)
+
+
+            mean = data_svm.mean(1)
+            self.smooth_window = 30
+            mean = self.filter_trace(mean)
+            std = np.std(data_svm,1)[15:-14]
+
+            t = np.linspace(-10,0,mean.shape[0])
+            plt.plot(t,mean,c='blue')
+            plt.fill_between(t, mean+std, mean-std, color='blue', alpha=.2)
+
+            plt.ylim(0.4,1.0)
+            plt.title(os.path.split(fname_svm)[1][11:25],fontsize=8)
+            plt.plot([-10,0],[0.5,0.5],'r--')
+            plt.xlim(-10,0)
+            if ctr!=31:
+                plt.yticks([])
+                plt.xticks([])
+
+            ctr+=1
+
+        plt.suptitle("Decision choice: RNN (black) vs. SVM (blue) ",fontsize=20)
+        plt.show()

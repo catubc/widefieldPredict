@@ -10,6 +10,7 @@ Original file is located at
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.pyplot import MultipleLocator
+from mpl_toolkits.mplot3d import Axes3D
 
 #
 import sklearn
@@ -19,17 +20,33 @@ from sklearn import preprocessing
 from sklearn.model_selection import cross_val_score
 from sklearn import svm
 from sklearn.metrics import confusion_matrix  #Required input to plot_confusion_matrix
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+from sklearn.metrics import accuracy_score
+from sklearn.metrics import roc_curve, auc
 
 #
 import tensorflow as tf
-physical_devices = tf.config.list_physical_devices('GPU')
-tf.config.experimental.set_memory_growth(physical_devices[0], True)
+import tensorflow_addons as tfa
+def get_available_gpus():
+    """Return a list of available GPUs."""
+    return tf.config.get_visible_devices("GPU")
+
+for gpu in get_available_gpus():
+    tf.config.experimental.set_memory_growth(gpu, True)
+
+#
+#physical_devices = tf.config.list_physical_devices('GPU')
+#tf.config.experimental.set_memory_growth(physical_devices[0], True)
 
 from tqdm import trange
 #
 from tensorflow import keras
 from tensorflow.keras import layers
+from tensorflow.keras.models import Model
 from tensorflow.python.client import device_lib
+import keras.backend as K
+from keras.callbacks import EarlyStopping, ModelCheckpoint
 
 #
 import pandas as pd
@@ -41,24 +58,25 @@ class PredictRNN():
 
     def __init__(self):
 
+        #
         self.code = 'code_04'
 
-        pass
+        #
+        self.learning_rate = 0.0001
+
+        #
+        self.epochs = 200
+
 
     def setup(self):
 
-        #print ("DEVICE: ", device_lib.list_local_devices())
+        try:
+            self.data_leverpress = np.load(self.fname,allow_pickle=True) # motor
+            self.data_random = np.load(self.fname_random,allow_pickle=True) # rest
+        except:
+            self.data_leverpress = np.zeros(0)
+            self.data_random = np.zeros(0)
 
-        #jobid = os.getenv('SLURM_ARRAY_TASK_ID')
-        #name='IA1'
-
-        #self.data_leverpress = np.load('/sfa18k/shreya.saxena/zhangyongxu/Cat/3.7/IA1_data/'+str(name)+'_'+str(jobid)+'.npy',allow_pickle=True) # motor
-        #self.data_random = np.load('/sfa18k/shreya.saxena/zhangyongxu/Cat/3.7/IA1_data/'+str(name)+'_random_'+str(jobid)+'.npy',allow_pickle=True) # rest
-        self.data_leverpress = np.load(self.fname,allow_pickle=True) # motor
-        self.data_random = np.load(self.fname_random,allow_pickle=True) # rest
-
-        # check if data has right size
-        print (" [n_trials, n_areas, n_time_steps] ", self.data_leverpress.shape)
 
     def make_training_data(self):
 
@@ -70,7 +88,7 @@ class PredictRNN():
 
         # make labels
         self.y=np.concatenate((np.ones(self.data_leverpress.shape[0]),
-                          np.zeros(self.data_random.shape[0])))
+                               np.zeros(self.data_random.shape[0])))
 
         # flatten data to 2 columns
         X_R= X.reshape(-1,X.shape[1]*X.shape[2])
@@ -91,9 +109,57 @@ class PredictRNN():
         self.X = X
 
 
-    def model_run(self, lr, epochs, X_train_R, y_train_R, X_test_R, y_test_R, verbose):
+
+    def get_predictions(self, model, x):
+
+
+        import keras.backend as K
+        lstm = model.layers[0]
+        attn_func = K.function(inputs = [model.get_input_at(0), K.learning_phase()],
+                               outputs = [lstm.output]
+                                )
+
+        #start = np.random.randint(0, len(data)-1)
+        #pattern = data[start]
+        result_list, output_values = [], []
+        #print("Seed:")
+        #print("\"" + ''.join([int_to_char[value] for value in pattern]) + "\"")
+        #print("\nGenerated:")
+
+        for i in range(1):
+            # Reshaping input array for predicting next character
+            #x = np.reshape(pattern, (1, len(pattern), 1))
+            #x = x / float(n_vocab)
+
+            # Prediction
+            prediction = model.predict(x, verbose=0)
+            print ("prediction: ", prediction)
+            # LSTM Activations
+            output = attn_func([x])[0][0]
+            output = sigmoid(output)
+            output_values.append(output)
+
+            # Predicted Character
+            index = np.argmax(prediction)
+            result = int_to_char[index]
+
+            # # Preparing input for next character
+            # seq_in = [int_to_char[value] for value in pattern]
+            # pattern.append(index)
+            # pattern = pattern[1:len(pattern)]
+
+            # Saving generated characters
+            result_list.append(result)
+
+        print ("output vals: ", output_values)
+        print ("result list: ", result_list)
+        return output_values, result_list
+
+
+    def model_run(self, X_train_R, y_train_R, X_test_R, y_test_R, verbose):
 
         #
+
         n_timesteps, n_features, n_outputs = X_train_R.shape[1], X_train_R.shape[2], 1 #y_train.shape[1]
 
         # setup model
@@ -101,26 +167,309 @@ class PredictRNN():
                                           tf.keras.layers.SimpleRNN(64,
                                                                     input_shape=(n_timesteps,n_features),
                                                                     activation='tanh'),
-                                          tf.keras.layers.Dense(n_outputs,activation='sigmoid')
+                                          tf.keras.layers.Dense(n_outputs,
+                                                                activation='sigmoid')
                                         ])
-        #
-        opt = tf.keras.optimizers.Adam(lr=self.learning_rate)
+        # call model
+        #model(tf.keras.Input((None,7)))
 
         #
-        model.compile(loss='binary_crossentropy', optimizer=opt, metrics=['accuracy'])
+        opt = tf.keras.optimizers.Adam(learning_rate=self.learning_rate)
+
+        #
+        model.compile(loss='binary_crossentropy',
+                      optimizer=opt,
+                      metrics=['accuracy'])
+
+        model.summary()
 
         #
         history=model.fit(X_train_R,
                           y_train_R,
                           epochs=self.epochs,
-                          validation_data=(X_test_R, y_test_R),
+                          # validation_data=(X_test_R, y_test_R),
                           batch_size=1000,
                           verbose=verbose)
 
-        #
-        acc=history.history['val_accuracy']
+        # temporal output visual
+        target_layer = model.layers[0]
+        target_layer.return_sequences = True
+        target_outputs = target_layer(target_layer.input)
+        target_model = Model(model.input, target_outputs)
+        y_predict=model.predict_classes(X_test_RN)
+        y_predict.shape
+
+        target_model.summary()
+
+        ac=np.zeros(120)
+        for i in range (0,120):
+          y_pre=y_predict[:,i,:]
+          ac[i]=accuracy_score(y_test_RN, y_pre)
+
         return history, acc
 
+
+    def model_run_whole(self):
+
+
+        X_train_R, X_test_R, y_train_R, y_test_R = train_test_split(self.X,self.y,test_size=0.2)
+        print("X train R: ", X_train_R.shape, " y_train_R: ", y_train_R.shape)
+
+        self.X_train_RN, self.X_test_RN, self.y_train_RN, self.y_test_RN = X_train_R[:,:300,:],X_test_R[:,:300], y_train_R,  y_test_R
+        print("X train RN: ", self.X_train_RN.shape,
+              self.X_test_RN.shape,
+              self.y_train_RN.shape,
+              self.y_test_RN.shape)
+
+        #
+        n_timesteps, n_features, n_outputs = self.X_train_RN.shape[1], self.X_train_RN.shape[2], 1 #y_train.shape[1]
+
+        # setup model
+        if self.rnn=='LSTM':
+            self.model = tf.keras.models.Sequential([
+                                  #tf.keras.layers.SimpleRNN(64,
+                                  # tf.keras.layers.SimpleRNN(256, return_sequences=True,
+                                  #                           input_shape=(n_timesteps,n_features),
+                                  #                           activation='tanh'),
+                                  #                           #activation='relu'),
+                                  # tf.keras.layers.Dense(256,
+                                  #                        activation='sigmoid'),
+
+                                  tf.keras.layers.LSTM(256,
+                                                            input_shape=(n_timesteps,n_features),
+                                                            activation='tanh'),
+                                #   tf.keras.layers.LSTM(
+                                #     units, activation='tanh', recurrent_activation='sigmoid',
+                                #     use_bias=True, kernel_initializer='glorot_uniform',
+                                #     recurrent_initializer='orthogonal',
+                                #     bias_initializer='zeros', unit_forget_bias=True,
+                                #     kernel_regularizer=None, recurrent_regularizer=None, bias_regularizer=None,
+                                #     activity_regularizer=None, kernel_constraint=None, recurrent_constraint=None,
+                                #     bias_constraint=None, dropout=0.0, recurrent_dropout=0.0,
+                                #     return_sequences=False, return_state=False, go_backwards=False, stateful=False,
+                                #     time_major=False, unroll=False, **kwargs
+                                # )
+
+                                  # tf.keras.layers.LSTM(32,return_sequences=True,
+                                  #                           input_shape=(n_timesteps,n_features),
+                                  #                           activation='tanh'),
+
+                                  # tf.keras.layers.LSTM(32,return_sequences=True,
+                                  #                           input_shape=(n_timesteps,n_features),
+                                  #                           activation='tanh'),
+                                  #
+                                  # tf.keras.layers.LSTM(32,
+                                  #                           input_shape=(n_timesteps,n_features),
+                                  #                           activation='tanh'),
+
+                                  tf.keras.layers.Dense(n_outputs,
+                                                        activation='sigmoid')
+                                ])
+        elif self.rnn=='SimpleRNN':
+            self.model = tf.keras.models.Sequential([
+                                              tf.keras.layers.SimpleRNN(64,
+                                              #tf.keras.layers.LSTM(128,
+                                                                        input_shape=(n_timesteps,n_features),
+                                                                        activation='tanh'),
+                                              tf.keras.layers.Dense(n_outputs,
+                                                                    activation='sigmoid')
+                                            ])
+        elif self.rnn=='GRU':
+            self.model = tf.keras.models.Sequential([
+                                              tf.keras.layers.GRU(128,
+                                              #tf.keras.layers.LSTM(128,
+                                                                        input_shape=(n_timesteps,n_features),
+                                                                        activation='relu'),
+                                              tf.keras.layers.Dense(n_outputs,
+                                                                    activation='sigmoid')
+                                            ])
+
+        # call model
+        opt = tf.keras.optimizers.Adam(learning_rate=self.learning_rate)
+
+        #
+        tqdm_callback = tfa.callbacks.TQDMProgressBar()
+
+        #
+        self.model.compile(loss='binary_crossentropy',
+                      optimizer=opt,
+                      metrics=['accuracy'])
+
+        self.model.summary()
+
+        class MyThresholdCallback(tf.keras.callbacks.Callback):
+            def __init__(self, threshold):
+                super(MyThresholdCallback, self).__init__()
+                self.threshold = threshold
+
+            def on_epoch_end(self, epoch, logs=None):
+                accuracy = logs["accuracy"]
+                if accuracy >= self.threshold:
+                    self.model.stop_training = True
+
+        early_stop_callback=MyThresholdCallback(threshold=0.99)
+        #
+        history=self.model.fit(self.X_train_RN,
+                          self.y_train_RN,
+                          epochs=self.epochs,
+                          # validation_data=(X_test_R, y_test_R),
+                          batch_size=2000,
+                          verbose=0,
+                          callbacks=[tqdm_callback, early_stop_callback])
+
+
+    def get_fname(self): # load ordered sessions from file
+
+        self.sessions = np.load(os.path.join(self.main_dir, self.animal_id,'tif_files.npy'))
+
+        data = []
+        for k in range(len(self.sessions)):
+            data.append(os.path.split(self.sessions[k])[1][:-4])
+        self.sessions = data
+
+        #
+        final_session = []
+        for k in range(len(self.sessions)):
+            if str(self.session_id) in str(self.sessions[k]):
+
+                final_session = self.sessions[k]
+                break
+
+        self.session = final_session
+
+        # select data with or without lockout
+        prefix1 = ''
+        if self.lockout:
+            prefix1 = '_lockout_'+str(self.lockout_window)+"sec"
+
+        # select data with pca compression
+        prefix2 = ''
+        if self.pca_flag:
+            prefix2 = '_pca_'+str(self.pca_var)
+
+        # make fname out for animal + session
+        fname = os.path.join(self.main_dir, self.animal_id,'tif_files',
+                     self.session,
+                     self.session+'_'+
+                     self.code+
+                     prefix1+
+                     '_trial_ROItimeCourses_'+
+                     str(self.window)+'sec'+
+                     prefix2+
+                     '.npy'
+                     )
+
+        self.fname = fname
+        self.fname_random = fname.replace('trial','random')
+
+
+    def run_whole(self):
+
+        try:
+            os.mkdir(os.path.join(self.main_dir, self.animal_id,'RNN_scores'))
+        except:
+            pass
+
+        fname_out = os.path.join(self.main_dir, self.animal_id,'RNN_scores',
+                                 "whole_"+self.session_id+"_"+str(self.epochs)+
+                                 "_"+str(self.learning_rate))+".npz"
+
+        if os.path.exists(fname_out):
+            return
+
+        self.model_run_whole()
+
+        print ("FINISHED PREDICTION...")
+
+
+    def run(self):
+
+        try:
+            os.mkdir(os.path.join(self.main_dir, self.animal_id,'RNN_scores'))
+        except:
+            pass
+
+        fname_out = os.path.join(self.main_dir, self.animal_id,'RNN_scores',
+                                 self.session_id+"_"+str(self.epochs)+
+                                 "_"+str(self.learning_rate))+".npz"
+
+        if os.path.exists(fname_out):
+            return
+
+        # setup object for xvalidation
+        kf = KFold(n_splits=10,
+                   random_state=None,
+                   shuffle=True)
+
+        # parameters for sliding window analysis
+        window = 30
+        shift = 30
+
+        #
+        b_rnn=[]
+        #for i in trange(0,571,30):
+        for i in trange(0,271,shift):
+          kt_X=self.X[:,i:i+window,:]  # this is a chunk window data grabber;
+          acc_rnn_s=np.zeros(10)
+          s=0
+          for train_index, test_index in kf.split(kt_X):
+              #print("Train:", train_index, "Validation:",test_index)
+              X_train_k, X_test_k = kt_X[train_index], kt_X[test_index]
+              y_train_k, y_test_k = self.y[train_index], self.y[test_index]
+
+              history, acc = self.model_run(
+                                         X_train_k,
+                                         y_train_k,
+                                         X_test_k,
+                                         y_test_k,
+                                         0)
+              acc_rnn_s[s]=acc[-1]
+              s=s+1
+
+          b_rnn.append(acc_rnn_s)
+
+        b_rnn=np.array(b_rnn)
+        a_s=np.mean(b_rnn,axis=1)
+        c_s=np.std(b_rnn,axis=1)/(10**0.5)
+
+        try:
+            os.mkdir(os.path.join(self.main_dir, self.animal_id,'RNN_scores'))
+
+        except:
+            pass
+
+        np.savez(fname_out,
+                 b_rnn = b_rnn,
+                 a_s = a_s,
+                 c_s = c_s)
+
+    def find_sessions(self):
+         # load ordered sessions from file
+        self.sessions = np.load(os.path.join(self.main_dir,
+                                             self.animal_id,
+                                             'tif_files.npy'))
+        #print (self.sessions)
+
+        data = []
+        for k in range(len(self.sessions)):
+            data.append(os.path.split(self.sessions[k])[1][:-4])
+        self.sessions = data
+
+        #
+        if self.session_id != 'all':
+            final_session = []
+            for k in range(len(self.sessions)):
+                if self.session_id in self.sessions[k]:
+                    final_session = [self.sessions[k]]
+                    break
+
+            self.sessions = final_session
+
+        # fix binary string files issues; remove 'b and ' from file names
+        for k in range(len(self.sessions)):
+            self.sessions[k] = str(self.sessions[k]).replace("'b",'').replace("'","")
+            if self.sessions[k][0]=='b':
+                self.sessions[k] = self.sessions[k][1:]
 
 
     def get_fname(self): # load ordered sessions from file
@@ -155,66 +504,62 @@ class PredictRNN():
             prefix2 = '_pca_'+str(self.pca_var)
 
         # make fname out for animal + session
-        fname = os.path.join(self.main_dir, self.animal_id,
-                             'SVM_Scores',
-                             'SVM_Scores_'+
-                             self.session+"_"+
-                             self.code+
-                             prefix1+
-                             '_trial_ROItimeCourses_'+
-                             str(self.window)+'sec'+
-                             prefix2+
-                             '.npy'
-                             )
+        fname = os.path.join(self.main_dir, self.animal_id,'tif_files',
+                     self.session,
+                     self.session+'_'+
+                     self.code+
+                     prefix1+
+                     '_trial_ROItimeCourses_'+
+                     str(self.window)+'sec'+
+                     prefix2+
+                     '.npy'
+                     )
+
         self.fname = fname
+        self.fname_random = fname.replace('trial','random')
 
 
-    def run(self):
+    def run_rnn(self):
 
-        # setup object for xvalidation
-        kf = KFold(n_splits=10,
-                   random_state=None,
-                   shuffle=True)
 
+        self.find_sessions()
 
         #
-        self.learning_rate = 0.0001
+        prefix1 = ''
+        if self.lockout:
+            prefix1 = '_lockout_'+str(self.lockout_window)+"sec"
 
         #
-        self.epochs = 200
+        prefix2 = ''
+        if self.pca_flag:
+            prefix2 = '_pca_'+str(self.pca_var)
 
 
-        #
-        b_rnn=[]
-        for i in trange(0,571,30):
-          kt_X=self.X[:,i:i+30,:]  # this is a chunk window data grabber;
-          acc_rnn_s=np.zeros(10)
-          s=0
-          for train_index, test_index in kf.split(kt_X):
-              #print("Train:", train_index, "Validation:",test_index)
-              X_train_k, X_test_k = kt_X[train_index], kt_X[test_index]
-              y_train_k, y_test_k = self.y[train_index], self.y[test_index]
-              #print(" y_train_kF: ", y_train_kF)
+        for s in range(len(self.sessions)):
+            # make fname out for animal + session
+            self.session_id = self.sessions[s]
+            self.fname = os.path.join(self.main_dir, self.animal_id,'tif_files',
+                                 self.session_id,
+                                 self.session_id+'_'+
+                                 self.code+
+                                 prefix1+
+                                 '_trial_ROItimeCourses_'+
+                                 str(self.window)+'sec'+
+                                 prefix2+
+                                 '.npy'
+                                 )
 
-              history, acc = self.model_run(
-                                         X_train_k,
-                                         y_train_k,
-                                         X_test_k,
-                                         y_test_k,
-                                         0)
-              acc_rnn_s[s]=acc[-1]
-              s=s+1
+            # #
+            self.get_fname()
 
-          b_rnn.append(acc_rnn_s)
+            #
+            self.setup()
 
-        b_rnn=np.array(b_rnn)
-        a_s=np.mean(b_rnn,axis=1)
-        c_s=np.std(b_rnn,axis=1)/(10**0.5)
+            if self.data_leverpress.shape[0]==0:
+                continue
 
-        fname_out = os.path.join(self.main_dir, self.animal_id,'RNN_scores',
-                                 self.session_id+str(self.epochs)+"_"+str(self.learning_rate)+'.npy')
+            #
+            self.make_training_data()
 
-        np.savez(fname_out,
-                 b_rnn = b_rnn,
-                 a_s = a_s,
-                 c_s = c_s)
+            #
+            self.run_whole()
