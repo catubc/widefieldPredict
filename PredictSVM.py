@@ -18,6 +18,7 @@ from sklearn.model_selection import cross_val_score
 from sklearn import svm
 from sklearn.metrics import confusion_matrix, accuracy_score
 from matplotlib.pyplot import MultipleLocator
+from sklearn.decomposition import PCA
 
 from tqdm import trange, tqdm
 
@@ -892,31 +893,7 @@ class PredictSVMChoice():
         labels = np.vstack(labels).T
         predictions = np.vstack(predictions).T
 
-
         return accuracy, labels, predictions
-
-    #
-    def compute_accuracy_svm(self,
-                             trials,
-                             random,
-                             data_split):
-
-        # shuffle data x times
-        run_ids = np.arange(self.cross_validation)
-
-        #
-        accuracy = parmap.map(run_svm_single_randomized,
-                              run_ids,
-                              self.sliding_window,
-                              trials,
-                              random,
-                              data_split,
-                              pm_processes = self.n_cores)
-
-        accuracy = np.array(accuracy)
-
-        return accuracy
-
 
 def run_svm_single_randomized(run_id,
                               window,
@@ -1041,6 +1018,400 @@ def run_svm_single_randomized_kFold(run_id,
 
         # test
         X_test = test[:,:,k:k+sliding_window]
+
+        X_test = X_test.reshape(X_test.shape[0],-1)
+        X_test = sklearn.preprocessing.scale(X_test)
+        #
+        y_pred = clf.predict(X_test)
+
+        #
+        acc = accuracy_score(labels_test, y_pred)
+        accuracy2.append(acc)
+        labels2.append(labels_test)
+        pred2.append(y_pred)
+
+    accuracy2 = np.array(accuracy2)
+    labels2 = np.array(labels2)
+    pred2 = np.array(pred2)
+
+    #print ("inner loop: accraucy: ", accuracy2.shape, labels2.shape, pred2.shape)
+    return accuracy2, labels2, pred2
+
+class PredictSVMConcatenated():
+
+    def __init__(self):
+        pass
+
+    def expand(self, r1, r2):
+        r1 = torch.from_numpy(r1.transpose(0,2,1))
+        r2 = torch.from_numpy(r2)
+        r3 = torch.matmul(r1, r2)
+
+        del r1
+        del r2
+        torch.cuda.empty_cache()
+
+        return r3
+
+    def concatenate_denoised_sessions(self):
+
+        #
+        trials = []
+        random = []
+        trials_in_sess = []
+        for session in sessions:
+            fname = os.path.join(self.root_dir, self.animal_id,
+                                 'tif_files',
+                                 session,
+                                 session+"_globalPcaDenoised.npz")
+            data = np.load(fname, allow_pickle=True)
+
+            t = data['trials_time_filters']
+            r = data['random_time_filters']
+
+            # clip number of trials in case too few random sessions.
+            max_trials = min(t.shape[0],r.shape[0])
+            t = t[:max_trials]
+            r = r[:max_trials]
+
+            trials.append(t)
+            random.append(r)
+            trials_in_sess.append(t.shape[0])
+
+        self.trials = np.vstack(trials)
+        self.random = np.vstack(random)
+        self.trials_in_sess = trials_in_sess
+        print (trials.shape, random.shape)
+
+
+    def denoise_sessions(self,
+                         subsample=False):
+
+        #
+        for session in sessions:
+            root_dir = self.root_dir+self.animal_id + '/tif_files/'
+            a, b = self.load_trial(root_dir, session, subsample, self.pca_val)
+
+            t1, t2 = self.pca_denoise_data(self.pca, a, self.nComp)
+            r1, r2 = self.pca_denoise_data(self.pca, b, self.nComp)
+
+            fname_out = os.path.join(self.root_dir, self.animal_id, 'tif_files', session,
+                                    session+"_globalPcaDenoised.npz")
+
+            np.savez(fname_out,
+                    trials_time_filters = t1,
+                    trials_space_filters = t2,
+                    random_time_filters = r1,
+                    random_space_filters = r2,
+                    sessions = sessions,
+                    pca = self.pca,
+                    nComp = self.nComp
+                    )
+
+    def load_trial(self, root_dir, session, subsample,
+                  pca_val):
+        r1 = np.load(root_dir+session+"/"+session+"_code_04_random_ROItimeCourses_30sec_pca_"+
+                     str(pca_val)+".npy")[:,:,:900]
+        r2 = np.load(root_dir+session+"/"+session+"_code_04_random_ROItimeCourses_30sec_pca_"+
+                     str(pca_val)+"_spatial.npy")
+
+        if subsample:
+            idx = np.random.choice(np.arange(r1.shape[0]), 10,replace=False)
+            r1 = r1[idx]
+
+        r3 = expand(r1,r2)
+        print (r1.shape, " to ", r3.shape)
+
+        t1 = np.load(root_dir+session+"/"+session+"_code_04_trial_ROItimeCourses_30sec_pca_"+
+                     str(pca_val)+".npy")[:,:,:900]
+        t2 = np.load(root_dir+session+"/"+session+"_code_04_trial_ROItimeCourses_30sec_pca_"+
+                     str(pca_val)+"_spatial.npy")
+
+        #
+        if subsample:
+            t1 = t1[idx]
+        t3 = expand(t1,t2)
+
+        return r3, t3
+
+
+    def make_pca_object(self):
+
+        #
+        print (" data in pre reshape:", self.r.shape)
+        X = self.r.reshape(self.r.shape[0]*self.r.shape[1],
+                                     self.r.shape[2])
+        print (" data into pca: ", X.shape)
+
+        # subselect data
+        n_selected = min(2500, X.shape[0])
+        idx = np.random.choice(np.arange(X.shape[0]),n_selected,
+                               replace=False)
+        X_select = X[idx]
+
+        pca = PCA()
+        pca.fit(X_select)
+
+        import pickle as pk
+        fname_pca = '/home/cat/pca.pkl'
+        pk.dump(pca, open(fname_pca,"wb"))
+
+
+        # compute # of components needed for reconsturction to the requierd limit
+        expl_variance = pca.explained_variance_
+        print (expl_variance)
+        expl_variance = expl_variance/expl_variance.sum(0)
+        print (expl_variance)
+        sums = 0
+        pca_explained_var_val = 0.99
+        for k in range(expl_variance.shape[0]):
+            sums+=expl_variance[k]
+            if sums>=pca_explained_var_val:
+                nComp = k+1
+                break
+
+        #
+        print ("nComp required: for var: ", pca_explained_var_val, " is: ",  k)
+        self.pca = pca
+
+        #
+        print ("manually set nComp to ", 20)
+        self.nComp = 20
+
+    #
+    def compute_accuracy_svm(self):
+
+        # randomize seed
+        np.random.seed()
+
+        # split data by taking each session's length into account;
+        idx_trials_split = []
+        idx_random_split = []
+        for p in range(self.xvalidation):
+            idx_trials_split.append([])
+            idx_random_split.append([])
+
+        #
+        count = 0
+        for k in range(len(self.trials_in_sess)):
+            idx_split_local = np.array_split(np.random.choice(
+                                                np.arange(self.trials_in_sess[k]),
+                                                           self.trials_in_sess[k],
+                                                           replace=False),
+                                                           self.xvalidation)
+
+            idx_random_local = np.array_split(np.random.choice(
+                                                np.arange(self.trials_in_sess[k]),
+                                                           self.trials_in_sess[k],
+                                                           replace=False),
+                                                           self.xvalidation)
+
+            # add selected ids from each session individually to ensure equal
+            #   submsampling of each session rather than the overall concatenated stack
+            for p in range(self.xvalidation):
+                idx_trials_split[p].extend(idx_split_local[p]+count)
+                idx_random_split[p].extend(idx_random_local[p]+count)
+
+            # advnace count:
+            count+=self.trials_in_sess[k]
+
+        print (" Idx trials: ", )
+        # idx_random_split = np.array_split(np.random.choice(np.arange(random.shape[0]),
+        #                                                    random.shape[0],
+        #                                                    replace=False),
+        #                                                    xvalidation)
+
+
+        #
+
+        # select groups for parallel processing
+        run_ids = np.arange(self.xvalidation)
+        data = parmap.map(run_svm_single_randomized_kFold,
+                                           run_ids,
+                                           idx_trials_split,
+                                           idx_random_split,
+                                           self.window,
+                                           self.method,
+                                           self.trials,
+                                           self.random,
+                                           pm_processes = 10,
+                                           pm_pbar=True)
+
+        #
+        accuracy = []
+        labels = []
+        predictions = []
+        for k in range(len(data)):
+            accuracy.append(data[k][0].T)
+            labels.append(data[k][1].T)
+            predictions.append(data[k][2].T)
+
+        accuracy = np.vstack(accuracy).T
+        labels = np.vstack(labels).T
+        predictions = np.vstack(predictions).T
+
+        #
+        fname_out = os.path.join('/media/cat/4TBSSD/yuki/IJ2/SVM_Scores/',
+                             'SVM_Scores_concatenated_'+
+                             'code_04'+
+                             '_trial_ROItimeCourses_'+
+                             str(window)+'sec'+
+                             "_Xvalid"+str(xvalid)+
+                             "_Slidewindow"+str(window)+
+                             '.npz'
+                             )
+        np.savez(fname_out,
+                accuracy = accuracy,
+                labels = labels,
+                predictions = predictions)
+
+
+
+    def pca_denoise_data(self, pca, data_stm, nComp):
+
+        #
+        X = data_stm.reshape(data_stm.shape[0]*data_stm.shape[1],
+                             data_stm.shape[2])
+
+        #
+        time_filters = pca.transform(X)[:,:nComp]
+        pca_time_filters = time_filters.reshape(data_stm.shape[0],
+                                                     data_stm.shape[1],
+                                                     -1).transpose(0,2,1)
+        pca_spatial_filters = pca.components_[:nComp,:]
+
+
+        print ("... made data: ", pca_time_filters.shape)
+        return pca_time_filters, pca_spatial_filters
+
+    # find no. of trials per session:
+    def get_no_trials(self):
+
+        #
+        fnames= np.load(self.root_dir + self.animal_id+'/tif_files.npy')
+        f = []
+        for fname in fnames:
+            f.append(os.path.split(fname)[-1][:-4])
+        fnames=np.vstack(f)
+
+        # get # of trial in each session
+        n_trials = []
+        sess_id = []
+        for fname in fnames:
+            t = self.root_dir+self.animal_id+"/tif_files/"+fname[0]+"/"+fname[0]+"_all_locs_selected.txt"
+            try:
+                d = np.loadtxt(t,
+                               dtype='str')
+                sess_id.append(fname[0])
+                n_trials.append(len(d))
+            except:
+                pass
+
+        self.n_trials = n_trials
+        self.sess_id = sess_id
+
+        #return n_trials, sess_id
+
+    def concatenate_trials(self):
+
+        sess_con = []
+        n_tr_con = []
+        for k in range(len(self.sess_id)):
+            total_tr = self.n_trials[k]
+            sess_local = []
+            sess_local.append(self.sess_id[k])
+
+            #
+            if total_tr< self.min_trials_concatenated:
+                # loop forward
+                for p in range(k+1, len(self.sess_id),1):
+                    total_tr+= self.n_trials[p]
+                    sess_local.append(self.sess_id[p])
+                    if total_tr>= self.min_trials_concatenated:
+                        break
+
+            sess_con.append(sess_local)
+            n_tr_con.append(total_tr)
+
+        self.sessions_con = sess_con
+        self.n_trials_con = n_tr_con
+
+    def compute_pca_data(self):
+
+        #
+        subsample= True #take only 10 trials per session for computing PCA object initially
+
+        # sliding window loop over data:
+        r = np.zeros((0,900,16384),'float32')  # Use extra 30 frame window?!?!
+        for session in self.sessions_con:
+            root_dir = self.root_dir+self.animal_id+'/tif_files/'
+
+            #
+            a, b = self.load_trial(root_dir, session, subsample, self.pca_val)
+            r = np.vstack((r,a))
+            r = np.vstack((r,b))
+            print ("done session: ", session)
+
+        #
+        print ("Total stack: ", r.shape)
+        self.r = r
+
+
+# single standing function that can be parallelized
+def run_svm_single_randomized_kFold(
+                                   run_id,
+                                   idx_trials_split,
+                                   idx_random_split,
+                                   window,
+                                   method,
+                                   trials,
+                                   random):
+
+    # train data excludes the run_id
+    idx_trials = np.delete(np.arange(trials.shape[0]),
+                               idx_trials_split[run_id])
+    idx_random = np.delete(np.arange(random.shape[0]),
+                               idx_random_split[run_id])
+
+    # test data is the left over labels
+    idx_trials_not = np.delete(np.arange(trials.shape[0]),idx_trials)
+    idx_random_not = np.delete(np.arange(random.shape[0]),idx_random)
+
+    # stack train data
+    train = np.vstack((trials[idx_trials],random[idx_random]))
+    labels_train = np.hstack((np.ones(trials[idx_trials].shape[0]),
+                              np.zeros(random[idx_random].shape[0])))
+
+    # stack test data
+    test = np.vstack((trials[idx_trials_not], random[idx_random_not]))
+    labels_test = np.hstack((np.ones(trials[idx_trials_not].shape[0]),
+                             np.zeros(random[idx_random_not].shape[0])))
+
+    #
+    accuracy2=[]
+    labels2 = []
+    pred2 = []
+    for k in range(0, trials.shape[2]-window, 1):
+        X = train#[:,:,:window]
+        X = X[:,:,k:k+window]
+        #if mean_filter:
+        #    X = np.mean(X,2)
+
+        X = X.reshape(train.shape[0],-1)
+
+        #
+        y = labels_train
+
+        #
+        X = sklearn.preprocessing.scale(X)
+
+        #
+        clf = svm.SVC(kernel=method)
+        clf.fit(X, y)
+
+
+        # test
+        X_test = test[:,:,k:k+window]
 
         X_test = X_test.reshape(X_test.shape[0],-1)
         X_test = sklearn.preprocessing.scale(X_test)
