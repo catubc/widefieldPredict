@@ -9,6 +9,7 @@ from scipy.signal import butter, filtfilt, cheby1
 from sklearn.decomposition import PCA
 from tqdm import tqdm
 import parmap
+from tqdm import tqdm, trange
 
 import os
 
@@ -268,8 +269,14 @@ class ProcessCalcium():
                 break
 
         if index == None:
-
             print ("DID NOT FIND MATCH between imaging and lever ---- RETURNING ")
+
+            # zero out locs selected because session can't be used
+            fname_out1 = os.path.split(self.fname_04)[0]
+            fname_out2 = os.path.split(fname_out1)[1]
+            np.savetxt(self.fname_04[:-4]+"_all_locs_selected.txt" , [])
+            np.savetxt(fname_out1+'/'+fname_out2+"_all_locs_selected.txt" , [])
+
             #print (temp_tif_files)
             return np.zeros((0),'float32')
 
@@ -282,6 +289,12 @@ class ProcessCalcium():
 
         if reclength ==0:
             print ("zero length recording exiting (excitation light failure)", recording)
+            # zero out locs selected because session can't be used
+            fname_out1 = os.path.split(self.fname_04)[0]
+            fname_out2 = os.path.split(fname_out1)[1]
+            np.savetxt(self.fname_04[:-4]+"_all_locs_selected.txt" , [])
+            np.savetxt(fname_out1+'/'+fname_out2+"_all_locs_selected.txt" , [])
+
             return np.zeros((0),'float32')
 
         # compute imaging rate;
@@ -292,6 +305,13 @@ class ProcessCalcium():
         else:
             np.save(images_file.replace('_aligned.npy','')+'_img_rate', session_img_rate)
             print ("Imaging rates between aligned and session are incorrect, exiting: ", session_img_rate)
+
+            # zero out locs selected because session can't be used
+            fname_out1 = os.path.split(self.fname_04)[0]
+            fname_out2 = os.path.split(fname_out1)[1]
+            np.savetxt(self.fname_04[:-4]+"_all_locs_selected.txt" , [])
+            np.savetxt(fname_out1+'/'+fname_out2+"_all_locs_selected.txt" , [])
+
             return np.zeros((0),'float32')
 
         #
@@ -317,45 +337,60 @@ class ProcessCalcium():
         abspositions = np.load(root_dir + '/tif_files/'+recording + '/'+recording + '_abspositions.npy')
 
         data_stm = []; traces = []; locs = []; codes = []
-        counter=-1
+        # counter=-1
         window = n_sec * session_img_rate      #THIS MAY NOT BE GOOD ENOUGH; SHOULD ALWAYS GO BACK AT LEAST X SECONDS EVEN IF WINDOW IS ONLY 1SEC or 0.5sec...
                                                                 #Alternatively: always compute using at least 3sec window, and then just zoom in
-        #print ("tirggers: ", img_frame_triggers)
+        ##################################################
+        ##################################################
+        ##################################################
+        data_stm = np.zeros((len(img_frame_triggers),(int(window)*2+1), 128, 128))
+        counter = 0
         for trigger in img_frame_triggers:
-            counter+=1
-            #NB: Ensure enough space for the sliding window; usually 2 x #frames in window
-            if trigger < (2*window) or trigger>(n_images-window):
-                continue  #Skip if too close to start/end
 
-            # load data chunk working with
+            # NOTE: STARTS AND ENDS OF RECORDINGS MAY NOT HAVE PROPER [Ca] DATA; MAY NEED TO SKIP MANUALLY
+
+            # load data chunk; make sure it is the right size; otherwise skip
             data_chunk = aligned_images[int(trigger-window):int(trigger+window)]
+            #print (data_chunk.shape[0], window*2+1)
+            if data_chunk.shape[0] != (int(window)*2+1):
+                continue
 
             if dff_method == 'globalAverage':
-                data_stm.append((data_chunk-global_mean)/global_mean)    #Only need to divide by global mean as original data_chunk did not have mean img added in
+                #data_stm.append(   #Only need to divide by global mean as original data_chunk did not have mean img added in
+                temp = (data_chunk-global_mean)/global_mean
+                data_stm[counter] = temp
 
             elif dff_method == 'slidingWindow':            #Use baseline -2*window .. -window
+                print (" SLDING WINDOW METHOD NOT USED ANYMORE")
+                return None
+                if trigger < (2*window) or trigger>(n_images-window):
+                    continue  #Skip if too close to start/end
                 baseline = np.average(aligned_images[int(trigger-2*window):int(trigger-window)], axis=0)
                 data_stm.append((data_chunk-baseline)/baseline)
 
-            #***PROCESS TRACES - WORKING IN DIFFERENT TIME SCALE
-            lever_window = int(120*n_sec)    #NB: Lever window is computing in real time steps @ ~120Hz; and discontinuous;
-            t = np.linspace(-lever_window*0.0082,
-                            lever_window*0.0082,
-                            lever_window*2)
-            #lever_position_index = find_nearest(np.array(self.abstimes), self.locs_44threshold[counter])
-            lever_position_index = self.find_nearest(np.array(abstimes), locs_selected[counter])
 
-            lever_trace = abspositions[int(lever_position_index-lever_window):int(lever_position_index+lever_window)]
+            # advance the counter
+            counter+=1
 
-            if len(lever_trace)!=len(t):    #Extraplote missing data
-                lever_trace = np.zeros(lever_window*2,dtype=np.float32)
-                for k in range(-lever_window,lever_window,1):
-                    lever_trace[k+lever_window] = self.abspositions[k+lever_window]     #Double check this...
+            # NOT USED ANYMORE
+            # #***PROCESS TRACES - WORKING IN DIFFERENT TIME SCALE
+            # lever_window = int(120*n_sec)    #NB: Lever window is computing in real time steps @ ~120Hz; and discontinuous;
+            # t = np.linspace(-lever_window*0.0082,
+            #                 lever_window*0.0082,
+            #                 lever_window*2)
+            # #
+            # lever_position_index = self.find_nearest(np.array(abstimes), locs_selected[counter])
+            # lever_trace = abspositions[int(lever_position_index-lever_window):int(lever_position_index+lever_window)]
+            #
+            # if len(lever_trace)!=len(t):    #Extraplote missing data
+            #     lever_trace = np.zeros(lever_window*2,dtype=np.float32)
+            #     for k in range(-lever_window,lever_window,1):
+            #         lever_trace[k+lever_window] = self.abspositions[k+lever_window]     #Double check this...
+            #
+            # traces.append(lever_trace)
 
-            traces.append(lever_trace)
-
-        data_stm = np.array(data_stm)
-
+        # data_stm = np.array(data_stm)
+        data_stm = data_stm[:counter]
         return data_stm
 
 
@@ -661,6 +696,7 @@ class ProcessCalcium():
                                      fname_filter,
                                      pca_denoise_flag):
 
+        self.fname_04 = fname_04
         from tqdm import trange
         if self.pca_etm:
             fname_out_final =  fname_04[:-4]+"_pca_"+str(self.pca_explained_var_val)+".npy"
@@ -837,18 +873,20 @@ class ProcessCalcium():
             # just select a fixed number of comps
             nComp = self.pca_fixed_comps
 
-        #print ("DATA_STM: ", data_stm.shape)
+        print ("DATA_STM: ", data_stm.shape)
         X = data_stm.reshape(data_stm.shape[0]*data_stm.shape[1],
                              data_stm.shape[2]*data_stm.shape[3])
 
         #
+        print("    denoising data (pca.transofrm(X)) ")
         time_filters = pca.transform(X)[:,:nComp]
+
+        time_filters = np.array(time_filters)
+        print("        done denoising data")
         pca_time_filters = time_filters.reshape(data_stm.shape[0],
-                                                     data_stm.shape[1],
-                                                     -1).transpose(0,2,1)
+                                                 data_stm.shape[1],
+                                                 -1).transpose(0,2,1)
         pca_spatial_filters = pca.components_[:nComp,:]
-
-
 
         return pca_time_filters, pca_spatial_filters
 
@@ -1011,8 +1049,9 @@ class ProcessCalcium():
                              data_stm.shape[2]*data_stm.shape[3])
 
         # subselect data
-        n_selected = min(1500, X.shape[0])
-        idx = np.random.choice(np.arange(X.shape[0]),n_selected,
+        n_selected = min(X.shape[0]//10, 10000)
+        idx = np.random.choice(np.arange(X.shape[0]),
+                               n_selected,
                                replace=False)
         X_select = X[idx]
 
@@ -1063,7 +1102,7 @@ class ProcessCalcium():
         save_stm_flag = False         # flag to save raw stm maps [128 x 128 x n_times] files during processing
         transform_data_flag = False   # flag which reverts to using manually aligned/transformed data
 
-        # denoise PCA
+        #
         pca_denoise_flag = False
 
         for name in names:
@@ -1099,9 +1138,15 @@ class ProcessCalcium():
             else:
                 for recording in tqdm(recordings):
 
+                    if self.skip_to != None:
+                        if self.skip_to in recording:
+                            self.skip_to = None
+                        print ("   skipping: ", recording)
+                        continue
+
                     if  self.sessions in recording or self.sessions=='all':
-                        #print ("recording: ", recording)
-                    #
+
+                        #
                         self.compute_trial_courses_ROI_code04_trigger(recording,
                                                                root_dir,
                                                                feature_name,
@@ -1115,4 +1160,5 @@ class ProcessCalcium():
                                                                fname_filter,
                                                                pca_denoise_flag)
 
-        #print ("DONE STMs....")
+
+

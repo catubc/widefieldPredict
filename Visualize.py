@@ -322,7 +322,13 @@ class Visualize():
     def process_session(self):
 
         #
-        data = np.load(self.fname, allow_pickle=True)
+        try:
+            data = np.load(self.fname, allow_pickle=True)
+        except:
+            print( " ... data missing", self.fname)
+            self.data = np.zeros((0))
+            return
+
         self.data = data['accuracy']
 
         # grab only first half:
@@ -369,6 +375,65 @@ class Visualize():
 
         #
         self.std = np.std(self.data, axis=1)
+
+    def process_session_concatenated(self):
+
+        #
+        try:
+            data = np.load(self.fname, allow_pickle=True)
+        except:
+            print( " ... data missing", self.fname)
+            self.data = np.zeros((0))
+            return
+
+        self.data = data['accuracy']
+
+        # grab only first half:
+        print ("LOADED: DATA" , self.data.shape)
+
+        # get n trials for both lockout and all trials data
+        if False:
+            self.get_number_of_trials()
+            #print (" post trials data size ", self.data.shape)
+
+            #
+            if self.n_trials<self.min_trials:
+                print ("Insufficient trials...", self.n_trials)
+                self.data = np.zeros((0))
+                return
+
+        fname_n_trials = self.fname[:-4]+'_n_trials.npy'
+        self.n_trials = np.load(fname_n_trials)
+
+        # gets the corect filename to be loaded below
+        self.get_fname()
+        #print (" post fname: ", self.data.shape)
+
+        #
+        if os.path.exists(self.fname)==False:
+            print ("missing: ", self.fname)
+            self.data = np.zeros((0))
+            return
+
+        #
+        mean = self.data.mean(1)
+
+        #
+        if self.smooth_window is not None:
+            #mean = self.filter_trace(mean)
+            data = []
+            for k in range(self.data.shape[1]):
+                data.append(self.filter_trace(self.data[:,k]))
+            self.data = np.array(data).copy().T
+
+            mean = self.data.mean(1)
+
+        #
+        self.mean = mean
+
+        #
+        self.std = np.std(self.data, axis=1)
+
 
     def plot_decision_choice(self, clr, label, ax=None):
 
@@ -472,6 +537,8 @@ class Visualize():
                     self.session_id = self.session_ids[p]
 
                     #
+                    self.fname = self.fnames_svm[p]
+
                     self.process_session()
                     # print ("a: ", a, self.session_id, self.data.shape)
                     #
@@ -554,7 +621,123 @@ class Visualize():
                          )
 
 
-    def plot_first_decoding_time(self, return_ids_threshold=None):
+    def compute_first_decoding_time_concatenated(self, lockouts=[False, True]):
+
+        #
+        #if lockouts = [False, True]
+        for lockout in lockouts:
+            self.lockout=lockout
+
+            all_res_continuous = []
+            all_res_earliest = []
+            all_session_nos = []
+            all_session_names = []
+            all_n_trials = []
+            all_sigs = []
+
+            #
+            for a in trange(len(self.animal_ids)):
+                res_continuous = []
+                res_earliest = []
+                session_nos = []
+                session_names = []
+                n_trials = []
+                sigs = []
+
+                #
+                self.animal_id = self.animal_ids[a]
+
+                #
+                self.get_sessions()
+                #
+                for p in range(len(self.session_ids)):
+                    self.session_id = self.session_ids[p]
+
+                    #
+                    self.fname = self.fnames_svm[p]
+
+                    self.process_session_concatenated()
+                    # print ("a: ", a, self.session_id, self.data.shape)
+                    #
+                    if self.data.shape[0] == 0:
+                        continue
+
+                    # compute significance
+                    self.compute_significance()
+
+                    # save all the significant vals;
+                    sigs.append(self.sig_save)
+
+                    #
+                    self.sig = self.sig.squeeze()
+
+                    # find earliest period of significance, going back in time;
+                    for k in range(self.sig.shape[0]-1,0,-1):
+                        if np.isnan(self.sig[k])==True:
+                            break
+
+                    #
+                    temp = -self.window+k/self.imaging_rate
+
+                    # Exclude one of the weird datapoint from the AQ2? session
+                    if temp>0:
+                        #print ("n trials: ", self.n_trials, a,
+                        #       p, temp, self.session_id, self.sig.shape)
+                        continue
+
+                    #
+                    res_continuous.append(temp)
+
+                    # find aboslute earliest
+                    k_earliest = self.sig.shape[0]
+                    for k in range(self.sig.shape[0]-1,0,-1):
+                        if np.isnan(self.sig[k])==True:
+                            k_earliest = k
+                    res_earliest.append(-self.window+k_earliest/self.imaging_rate)
+
+                    #
+                    session_nos.append(p)
+
+                    #
+                    session_names.append(self.session_id)
+
+                    #
+                    n_trials.append(self.n_trials)
+
+                # save data
+                all_res_continuous.append(res_continuous)
+                all_res_earliest.append(res_earliest)
+                all_session_nos.append(session_nos)
+                all_session_names.append(session_names)
+                all_n_trials.append(n_trials)
+                all_sigs.append(sigs)
+
+            if lockout==False:
+                np.savez(self.main_dir+'/first_decoding_time'+
+                         "_concatenated.npz",
+                         all_res_continuous = all_res_continuous,
+                         all_res_earliest = all_res_earliest,
+                         all_session_nos = all_session_nos,
+                         all_session_names = all_session_names,
+                         all_n_trials = all_n_trials,
+                         all_sigs = all_sigs
+                         )
+            else:
+                np.savez(self.main_dir+'/first_decoding_time'+
+                         "_minTrials"+str(self.min_trials)+
+                         '_lockout_'+
+                         str(self.window)+'sec.npz',
+                         all_res_continuous = all_res_continuous,
+                         all_res_earliest = all_res_earliest,
+                         all_session_nos = all_session_nos,
+                         all_session_names = all_session_names,
+                         all_n_trials = all_n_trials,
+                         all_sigs = all_sigs
+                         )
+
+    def plot_first_decoding_time(self,
+                                 return_ids_threshold,
+                                 clrs):
 
         # flag to search for any signfiicant decoding time, not just continous ones
         earliest = False
@@ -570,15 +753,15 @@ class Visualize():
             all_session_names = data['all_session_names']
             all_session_nos = data['all_session_nos']
 
-            data = np.load(self.main_dir+'/first_decoding_time'+
-                         "_minTrials"+str(self.min_trials)+
-                         '_lockout_'+
-                         str(self.window)+'sec.npz',
-                         allow_pickle=True)
-            all_res_continuous_lockout = data['all_res_continuous']
             try:
-                all_session_names_lockout = data['all_session_names']
+                data = np.load(self.main_dir+'/first_decoding_time'+
+                             "_minTrials"+str(self.min_trials)+
+                             '_lockout_'+
+                             str(self.window)+'sec.npz',
+                             allow_pickle=True)
+                all_res_continuous_lockout = data['all_res_continuous']
             except:
+                all_res_continuous_lockout = []
                 pass
             #all_n_trials = data['all_n_trials']
         else:
@@ -602,6 +785,7 @@ class Visualize():
         data_sets_all = []
         for k in range(len(all_res_continuous_all)):
             data_sets_all.append(all_res_continuous_all[k])
+        print (data_sets_all)
         #
         data_sets_lockout = []
         for k in range(len(all_res_continuous_lockout)):
@@ -636,10 +820,10 @@ class Visualize():
         fig, ax = plt.subplots(figsize=(10,5))
         for x_loc, binned_data, binned_data_lockout in zip(x_locations, binned_data_sets_all, binned_data_sets_lockout):
             lefts = x_loc - 0.3# * binned_data
-            ax.barh(centers, -binned_data, height=heights, left=lefts, color='black')
+            ax.barh(centers, -binned_data, height=heights, left=lefts, color=clrs[0])
 
             lefts = x_loc #- 0.5 * binned_data_lockout
-            ax.barh(centers, binned_data_lockout, height=heights, left=lefts, color='blue')
+            ax.barh(centers, binned_data_lockout, height=heights, left=lefts, color=clrs[1])
 
         ax.set_xticks(x_locations)
         ax.set_xticklabels(self.labels)
@@ -698,7 +882,9 @@ class Visualize():
                  linewidth=3)
 
 
-    def plot_first_decoding_time_vs_n_trials(self):
+    def plot_first_decoding_time_vs_n_trials(self,
+                                             clr,
+                                             fname=None):
         #labels = ["M1", "M2", "M3", "M4","M5",'M6']
 
         # flag to search for any signfiicant decoding time, not just continous ones
@@ -707,39 +893,51 @@ class Visualize():
         if earliest==False:
             # data = np.load(self.main_dir + '/first_decoding_time_all_'+str(self.window)+
             #                'sec.npz',allow_pickle=True)
-            data = np.load(self.main_dir+'/first_decoding_time'+
-                         "_minTrials"+str(self.min_trials)+
-                         '_all_'+
-                         str(self.window)+'sec.npz',
-                         allow_pickle=True)
+            if fname is None:
+                fname = os.path.join(self.main_dir,
+                                     '/first_decoding_time'+ "_minTrials"+str(self.min_trials)+
+                                     '_all_'+
+                                     str(self.window)+'sec.npz')
+
+            data = np.load(fname,
+                          allow_pickle=True)
 
 
             res_continuous_all = data['all_res_continuous']
             all_n_trials = data['all_n_trials']
 
-            data = np.load(self.main_dir+'/first_decoding_time'+
-                         "_minTrials"+str(self.min_trials)+
-                         '_lockout_'+
-                         str(self.window)+'sec.npz',
-                         allow_pickle=True)
-            res_continuous_lockout = data['all_res_continuous']
-            lockout_n_trials = data['all_n_trials']
+            if self.lockout==True:
+                try:
+                    data = np.load(self.main_dir+'/first_decoding_time'+
+                                 "_minTrials"+str(self.min_trials)+
+                                 '_lockout_'+
+                                 str(self.window)+'sec.npz',
+                                 allow_pickle=True)
+                    res_continuous_lockout = data['all_res_continuous']
+                    lockout_n_trials = data['all_n_trials']
+                except:
+                    res_continuous_lockout=[]
+                    lockout_n_trials = []
+            else:
+                res_continuous_lockout=[]
+                lockout_n_trials = []
         else:
             print ("Data not found, skipping")
             return
 
         #
-        fig = plt.figure()
+        fig = plt.figure(figsize=(20,20))
         all_preds = []
         all_trials = []
         import matplotlib.patches as mpatches
 
         for k in range(len(res_continuous_all)):
             ax=plt.subplot(2,3,k+1)
-            plt.ylim(0,200)
-            plt.xlim(-self.window,0)
+            plt.ylim(200,400)
+
+            plt.xlim(self.xlim,0)
             plt.xticks([])
-            plt.yticks([])
+            #plt.yticks([])
 
             trials1 = np.array(all_n_trials[k])
             predictions1 = np.array(res_continuous_all[k])
@@ -753,7 +951,7 @@ class Visualize():
                         s=100,
                         c=np.arange(trials1.shape[0])+20,
                         edgecolors='black',
-                        cmap=cm.Greys)
+                        cmap=cm.Reds)
 
             #
             #all_preds.extend(self.predictions1)
@@ -772,11 +970,14 @@ class Visualize():
 
 
             # LOCKOUT TRIALS
-            trials2 = np.array(lockout_n_trials[k])
-            print ("lockout trials2: ", trials2)
-            predictions2 = np.array(res_continuous_lockout[k])
-            corr_pred_trial_lockout = scipy.stats.pearsonr(predictions2, trials2)
-            corr_pred_time_lockout = scipy.stats.pearsonr(predictions2, np.arange(len(predictions2)))
+            try:
+                trials2 = np.array(lockout_n_trials[k])
+                print ("lockout trials2: ", trials2)
+                predictions2 = np.array(res_continuous_lockout[k])
+                corr_pred_trial_lockout = scipy.stats.pearsonr(predictions2, trials2)
+                corr_pred_time_lockout = scipy.stats.pearsonr(predictions2, np.arange(len(predictions2)))
+            except:
+                pass
 
             from decimal import Decimal
             patches = []
@@ -790,33 +991,40 @@ class Visualize():
                                        str(round(corr_pred_time[0],2))+
                                        " ("+str("pval: {0:.1}".format(corr_pred_time[1]))+")"
                                         ))
-            patches.append(mpatches.Patch(color='blue',
-                                       label='lockout vs. # trials: '+
-                                       str(round(corr_pred_trial_lockout[0],2))+
-                                       " ("+str("pval: {0:.1}".format(corr_pred_trial_lockout[1]))+")"
-                                      ))
 
-            patches.append(mpatches.Patch(color='lightblue',
-                                       label='lockout vs. time: '+
-                                       str(round(corr_pred_time_lockout[0],2))+
-                                       " ("+str("pval: {0:.1}".format(corr_pred_time_lockout[1]))+")"
-                                      ))
+            try:
+                patches.append(mpatches.Patch(color='blue',
+                                           label='lockout vs. # trials: '+
+                                           str(round(corr_pred_trial_lockout[0],2))+
+                                           " ("+str("pval: {0:.1}".format(corr_pred_trial_lockout[1]))+")"
+                                          ))
 
-            plt.legend(handles=patches,
-                       fontsize=6)
+                patches.append(mpatches.Patch(color='lightblue',
+                                           label='lockout vs. time: '+
+                                           str(round(corr_pred_time_lockout[0],2))+
+                                           " ("+str("pval: {0:.1}".format(corr_pred_time_lockout[1]))+")"
+                                          ))
+            except:
+                pass
 
-            plt.scatter(predictions2,
-                        trials2,
-                        s=100,
-                        c=np.arange(trials2.shape[0])+20,
-                        edgecolors='black',
-                        cmap=cm.Blues)
+            if True:
+                plt.legend(handles=patches,
+                           fontsize=6)
 
-            self.fit_line(predictions2,
-                          trials2,
-                          'blue',
-                          ax)
+            try:
+                plt.scatter(predictions2,
+                            trials2,
+                            s=100,
+                            c=np.arange(trials2.shape[0])+20,
+                            edgecolors='black',
+                            cmap=cm.Blues)
 
+                self.fit_line(predictions2,
+                              trials2,
+                              'blue',
+                              ax)
+            except:
+                pass
 
             # select n_trials > 100 and connect them
             idx = np.where(trials1>80)[0]
@@ -1147,18 +1355,13 @@ class Visualize():
             self.session = os.path.split(self.sessions[k])[1][:-4]
             self.session_ids.append(self.session)
 
-            # save full path of svm data
             fname = os.path.join(self.main_dir, self.animal_id,
-                     'SVM_Scores',
-                     'SVM_Scores_'+
-                     self.session+"_"+
-                     self.code+
-                     prefix1+
-                     '_trial_ROItimeCourses_'+
-                     str(self.window)+'sec'+
-                     prefix2+
-                     '.npy'
+                     'tif_files',
+                     self.session,
+                     self.session+
+                     '_globalPca_min_trials_concatenated200_code_04_30sec_accuracy.npz'
                      )
+
             self.fnames_svm.append(fname)
 
 
