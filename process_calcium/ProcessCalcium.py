@@ -4,10 +4,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pickle as pk
 
+import glob
+
 import string, re
 from scipy.signal import butter, filtfilt, cheby1
 from sklearn.decomposition import PCA
-from tqdm import tqdm
 import parmap
 from tqdm import tqdm, trange
 
@@ -16,8 +17,8 @@ import os
 class ProcessCalcium():
 
     def __init__(self):
+        self.verbose = False
 
-        pass
 
     def sum_pixels_in_registered_mask(self, data, maskwarp):
 
@@ -173,6 +174,8 @@ class ProcessCalcium():
                             n_sec_window
                             ):
 
+        if self.verbose:
+            print ("    computing DFF")
 
         # ###################################################
         # ###################################################
@@ -520,8 +523,10 @@ class ProcessCalcium():
 
         feature_movements = np.vstack(f)
 
-        # subsample these
-        idx = np.random.choice(np.arange(feature_movements.shape[0]),min(100,feature_movements.shape[0]))
+        # subsample the times from all the data
+        # 100 trials will give bewtween 30,000 to 90,000 frames for PCA
+        idx = np.random.choice(np.arange(feature_movements.shape[0]),
+                               min(100,feature_movements.shape[0]))
         feature_movements = feature_movements[idx]
 
         if feature_movements.shape[0]<=1:
@@ -581,21 +586,33 @@ class ProcessCalcium():
                                                  ):   # THIS IS THE DFF TIEM COURSE WINDOW; e.g. -10..+10sec
 
 
+        if self.verbose:
+            print ("   recording: ", recording)
+
         # SET PARAMETERS
-        # n_sec_window = 10
         dff_method = 'globalAverage'
 
         #
         if self.whole_stack == True:
             locs_selected, locs_selected_with_lockout = self.get_triggers_bodyparts_whole_stack(recording)
 
+        elif self.features=='code_04':
+            locs_selected, locs_selected_with_lockout = self.get_04_triggers_with_lockout(root_dir,
+                                                                                     recording,
+                                                                                     lockout_window)
+        elif 'left_paw' in self.features:
+            locs_selected, locs_selected_with_lockout = self.get_triggers_bodyparts_whole_stack(recording)
+
         else:
-            print (" This notebook only used for whole stack, exiting")
+            if self.verbose:
+                print ("     The feature selected can't be found, exiting")
             return
 
+        # locs_selected = np.arange(100,1000,10)
         #
         if len(locs_selected)==0:
-            print (" ... session has no lever pulls ", recording)
+            if self.verbose:
+                print (" ... session has no events ", recording)
             return
         
         # GENERATE SAVE FILENAMES FOR ALL CODE_04 DATA
@@ -606,7 +623,10 @@ class ProcessCalcium():
                         "_random_ROItimeCourses_"+str(n_sec_window)+"sec.npy")
 
         # good idea to save these as text to see them after:
-        np.savetxt(fname_04[:-4]+"_locs_selected.txt" , locs_selected)
+        fname_locs = fname_04[:-4]+"_locs_selected.txt"
+        #if self.verbose:
+        #    print ("fname-locs: ", fname_locs)
+        np.savetxt(fname_locs, locs_selected)
 
         #
         self.generate_arrays_ROI_triggered(root_dir,
@@ -651,6 +671,96 @@ class ProcessCalcium():
                                              use_fixed_filter_flag,
                                              fname_filter,
                                          pca_denoise_flag)
+
+    #
+    # def compute_trial_courses_ROI_code04_trigger(self,
+    #                                              recording,
+    #                                              root_dir,
+    #                                              feature_name,
+    #                                              lockout_window,
+    #                                              n_sec_window,
+    #                                              recompute,
+    #                                              midline_filter_flag,
+    #                                              save_stm_flag,
+    #                                              transform_data_flag,
+    #                                              use_fixed_filter_flag,
+    #                                              fname_filter,
+    #                                              pca_denoise_flag
+    #                                              ):   # THIS IS THE DFF TIEM COURSE WINDOW; e.g. -10..+10sec
+    #
+    #
+    #     # SET PARAMETERS
+    #     # n_sec_window = 10
+    #     dff_method = 'globalAverage'
+    #
+    #     #
+    #     if self.whole_stack == True:
+    #         locs_selected, locs_selected_with_lockout = self.get_triggers_bodyparts_whole_stack(recording)
+    #
+    #     else:
+    #         print (" This notebook only used for whole stack, exiting")
+    #         return
+    #
+    #     #
+    #     if len(locs_selected)==0:
+    #         print (" ... session has no lever pulls ", recording)
+    #         return
+    #
+    #     # GENERATE SAVE FILENAMES FOR ALL CODE_04 DATA
+    #     fname_04 = (root_dir + '/tif_files/' + recording + '/' + recording + "_"+feature_name+
+    #                 "_trial_ROItimeCourses_"+str(n_sec_window)+"sec.npy")
+    #
+    #     fname_random = (root_dir + '/tif_files/' + recording + '/' + recording + "_"+feature_name+
+    #                     "_random_ROItimeCourses_"+str(n_sec_window)+"sec.npy")
+    #
+    #     # good idea to save these as text to see them after:
+    #     np.savetxt(fname_04[:-4]+"_locs_selected.txt" , locs_selected)
+    #
+    #     #
+    #     self.generate_arrays_ROI_triggered(root_dir,
+    #                                          dff_method,
+    #                                          recording,
+    #                                          locs_selected,
+    #                                          n_sec_window,
+    #                                          fname_04,
+    #                                          fname_random,
+    #                                          recompute,
+    #                                          midline_filter_flag,
+    #                                          save_stm_flag,
+    #                                          transform_data_flag,
+    #                                          use_fixed_filter_flag,
+    #                                          fname_filter,
+    #                                          pca_denoise_flag
+    #                                          )
+    #
+    #     # just compute PCA and return;
+    #     if self.feature_name=="whole_stack":
+    #         return
+    #
+    #
+    #     # GENERATE SAVE FILENAMES FOR LOCKOUT DATA
+    #     fname_04 = (root_dir + '/tif_files/' + recording + '/' + recording + "_"+feature_name+
+    #                 "_lockout_"+str(lockout_window)+"sec_trial_ROItimeCourses_"+str(n_sec_window)+"sec.npy")
+    #     fname_random = (root_dir + '/tif_files/' + recording + '/' + recording + "_"+feature_name+
+    #                     "_lockout_"+str(lockout_window)+"sec_random_ROItimeCourses_"+str(n_sec_window)+"sec.npy")
+    #
+    #     #if os.path.exists(fname_04)==False:
+    #     self.generate_arrays_ROI_triggered(root_dir,
+    #                                          dff_method,
+    #                                          recording,
+    #                                          locs_selected_with_lockout,
+    #                                          n_sec_window,
+    #                                          fname_04,
+    #                                          fname_random,
+    #                                          recompute,
+    #                                          midline_filter_flag,
+    #                                          save_stm_flag,
+    #                                          transform_data_flag,
+    #                                          use_fixed_filter_flag,
+    #                                          fname_filter,
+    #                                      pca_denoise_flag)
+
+    #
 
     #
     def load_trial_courses_ROI_code04_trigger(self,
@@ -782,15 +892,14 @@ class ProcessCalcium():
         fname_time_filters = fname_04[:-4]+"_pca_"+str(self.pca_explained_var_val)+".npy"
         fname_pca = fname_04[:-4]+"_pca.pkl"
 
-        if os.path.exists(fname_pca):
-            print ("  ... data already processed", fname_pca)
+        if os.path.exists(fname_time_filters):
+            print ("  ... data already processed", fname_time_filters)
             return
 
         #
         self.fname_04 = fname_04
-        from tqdm import trange
-        if self.pca_etm:
-            fname_out_final =  fname_04[:-4]+"_pca_"+str(self.pca_explained_var_val)+".npy"
+        if self.pca_etm:   # THis checks to see if time filters are already saved...
+            fname_out_final =  fname_04[:-4]+"_pca_"+str(self.pca_explained_var_val)+".npy"  # time filter file
             fname_out_random_final = fname_random[:-4]+"_pca_"+str(self.pca_explained_var_val)+".npy"
 
             if os.path.exists(fname_out_final) and os.path.exists(fname_out_random_final) and self.recompute==False:
@@ -800,18 +909,29 @@ class ProcessCalcium():
             if os.path.exists(fname_04) and os.path.exists(fname_random) and self.recompute==False:
                 return
 
-        # Compute DFF
-        data_stm = self.compute_DFF_function(
+        ########################################################
+        ########## COMPUTE DFF FOR TRIAL  DATA #################
+        ########################################################
+        if os.path.exists(fname_pca)==False or self.whole_stack==False:
+            data_stm = self.compute_DFF_function(
                                 root_dir,
                                 dff_method, # 'globalAverage' or 'slidingWindow'
                                 recording,
                                 locs_selected,
                                 n_sec_window
                                 )
+        elif self.whole_stack==True:
+            # if computing_whol stack, data_stm is just the aligned filter entire dataset:
+            fname = os.path.join(root_dir,'tif_files',
+                                          recording,
+                                          recording)
+            fname_data_stm = glob.glob(fname+"_aligned_butterworth*.npy")[0]
+            if self.verbose:
+                print ("fname data stm for whole stack: ", fname_data_stm)
+            data_stm = np.load(fname_data_stm)
+            if self.verbose:
+                print ("    data_stm: ", data_stm.shape)
 
-        ########################################################
-        ########## COMPUTE DFF FOR TRIAL  DATA #################
-        ########################################################
         # return if DFF data is none
         if data_stm.shape[0]==0:
             print ("data_stm is empty (could not compute stm, skipping : ", recording, " )")
@@ -828,10 +948,14 @@ class ProcessCalcium():
             fname_pca = fname_04[:-4]+"_pca.pkl"
 
             # USE EXISTING 10SEC PCA OBJECT; NO NEED DO RECOMPUTE IT
-            if self.feature_name!='whole_stack':
-                if os.path.exists(fname_pca)==False:
-                    fname_pca = fname_pca.replace('15sec','10sec')
+            # this should not be used anymore; just recompute all PCA data always;
+            # if self.feature_name!='whole_stack':
+            #     if os.path.exists(fname_pca)==False:  # This should not be used anymore
+            #         fname_pca = fname_pca.replace('15sec','10sec')
 
+            ####################################
+            ######## COMPUTE PCA STACK #########
+            ####################################
             if os.path.exists(fname_pca)==False:
 
                 pca = self.pca_object(data_stm)
@@ -847,13 +971,17 @@ class ProcessCalcium():
                 #
                 pca = pk.load(file)
 
+            ####################################
+            ######## DENOISE DATA ##############
+            ####################################
             # compute PCA denoised STM for regular data;
-            if True:
-                pass
-                #pca_etm_time_filters, pca_etm_spatial_filters = self.get_pca_filters_whole_stack(pca, data_stm)
+            if self.whole_stack:
 
-                #np.save(fname_04[:-4]+"_pca_"+str(self.pca_explained_var_val)+".npy", pca_etm_time_filters)
-                #np.save(fname_04[:-4]+"_pca_"+str(self.pca_explained_var_val)+"_spatial.npy", pca_etm_spatial_filters)
+                pca_etm_time_filters, pca_etm_spatial_filters = self.get_pca_filters_whole_stack(pca,
+                                                                                                 data_stm)
+
+                np.save(fname_04[:-4]+"_pca"+str(self.pca_fixed_comps)+"components.npy", pca_etm_time_filters)
+                np.save(fname_04[:-4]+"_pca"+str(self.pca_fixed_comps)+"components_spatial.npy", pca_etm_spatial_filters)
 
 
             else:
@@ -940,33 +1068,37 @@ class ProcessCalcium():
         # return trial_courses_fixed, trial_courses_random_fixed
 
 
-    def get_pca_filters_whole_stack(self, pca):
+    def get_pca_filters_whole_stack(self, pca, data_stm):
+
+        #if self.verbose:
+        #    print ( "    todo: REMOVE THE 1000 frame limitation")
+
+        #data_stm = data_stm[:1000]
 
         # use set components for whole stack
-        self.pca_fixed_comps = self.pca_n_components
         nComp = self.pca_fixed_comps
 
-        print ("NOT IMPLENETED YET ")
-        return
-        # load entire calcium imaging data and compute dff
-        fname_data = os.path.join(root_dir + '/tif_files/' + recording + '/' + recording + "_"+feature_name+
-                    "_trial_ROItimeCourses_"+str(n_sec_window)+"sec.npy")
-
-        #/media/cat/4TBSSD/yuki/IA1/tif_files/IA1pm_Feb1_30Hz/IA1pm_Feb1_30Hz_aligned_butterworth_0.1hz_6.0hz.npy
-        print ("DATA_STM: ", data_stm.shape)
-        X = data_stm.reshape(data_stm.shape[0]*data_stm.shape[1],
-                             data_stm.shape[2]*data_stm.shape[3])
-
         #
-        print("    denoising data (pca.transofrm(X)) ")
+        X = data_stm.reshape(data_stm.shape[0],-1)
+        if self.verbose:
+            print ("    data pre PCA: ", data_stm.shape)
+            print ("    data X into PCA: ", X.shape)
+        #
+        if self.verbose:
+            print("    denoising data (pca.transofrm(X)) ")
         time_filters = pca.transform(X)[:,:nComp]
 
         time_filters = np.array(time_filters)
-        print("        done denoising data")
+        if self.verbose:
+            print("        done denoising data")
+
+        #
         pca_time_filters = time_filters.reshape(data_stm.shape[0],
-                                                 data_stm.shape[1],
-                                                 -1).transpose(0,2,1)
+                                                 -1)#.transpose(0,2,1)
         pca_spatial_filters = pca.components_[:nComp,:]
+        if self.verbose:
+            print ("    pca time filters; ", pca_time_filters.shape)
+            print ("    pca space filters; ", pca_spatial_filters.shape)
 
         return pca_time_filters, pca_spatial_filters
 
@@ -984,10 +1116,6 @@ class ProcessCalcium():
                     break
         else:
             # just select a fixed number of comps
-            nComp = self.pca_fixed_comps
-
-        if self.pca_n_components != 0:
-            self.pca_fixed_comps = self.pca_n_components
             nComp = self.pca_fixed_comps
 
         print ("DATA_STM: ", data_stm.shape)
@@ -1234,7 +1362,8 @@ class ProcessCalcium():
                 except:
                     recordings.append(os.path.split(temp_recs[k])[1][:-4])
 
-            print ("PROCESSING: ", name)
+            if self.verbose:
+                print ("PROCESSING: ", name)
 
             if parallel:
                 print ("TO IMPLMENET SELECTED SESSIONS IN PARALLEL")
