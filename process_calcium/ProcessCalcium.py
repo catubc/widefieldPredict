@@ -93,7 +93,8 @@ class ProcessCalcium():
 
         return trial_courses_fixed, trial_courses_random_fixed
 
-    #select code 04/02/07 triggers;
+
+
     def get_04_triggers_with_lockout(self, root_dir, recording, lockout_window):
 
         # make sure locs
@@ -489,22 +490,95 @@ class ProcessCalcium():
 
         return
 
+    #select code 04/02/07 triggers;
+    def get_triggers_bodyparts_whole_stack(self, recording):
+
+        # find filename
+        fname = os.path.join(self.main_dir,self.animal_id,'tif_files',recording,
+                             recording+"_"+str(self.feature_quiescence)+"secNoMove_movements.npz")
+        #print ("FNAME: movement feature: ", fname)
+        try:
+            data = np.load(fname, allow_pickle=True)
+        except:
+            print ("No video available: ", recording)
+            return [], []
+
+        #
+        labels = data['labels']
+        for k in range(len(labels)):
+            if self.feature_name==labels[k]:
+                feature_id = k
+                break
+
+        #
+        feat = data['feature_movements']
+        f = []
+        for k in range(feat.shape[0]):
+            temp = np.array(feat[k])#.T
+            if temp.shape[0]>0:
+                f.append(temp)
+
+        feature_movements = np.vstack(f)
+
+        # subsample these
+        idx = np.random.choice(np.arange(feature_movements.shape[0]),min(100,feature_movements.shape[0]))
+        feature_movements = feature_movements[idx]
+
+        if feature_movements.shape[0]<=1:
+            feature_starts = np.zeros((0),'float32')
+        else:
+            feature_starts = feature_movements[:,1]
+
+        return feature_starts, []
+
+    def get_triggers_bodyparts(self, recording):
+        # find filename
+        fname = os.path.join(self.main_dir,self.animal_id,'tif_files',recording,
+                             recording+"_"+str(self.feature_quiescence)+"secNoMove_movements.npz")
+        #print ("FNAME: movement feature: ", fname)
+        try:
+            data = np.load(fname, allow_pickle=True)
+        except:
+            print ("No video available: ", recording)
+            return [], []
+
+        #
+        labels = data['labels']
+        for k in range(len(labels)):
+            if self.feature_name==labels[k]:
+                feature_id = k
+                break
+
+        #
+        feature_movements = np.array(data['feature_movements'][feature_id])
+        #print (fname, feature_id, feature_movements)
+        if feature_movements.shape[0]<=1:
+            feature_starts = np.zeros((0),'float32')
+        else:
+            feature_starts = feature_movements[:,1]
+        #print ("feature nomovements starts/ends: ", feature_movements)
+
+        #if self.remove_shift:
+
+       # print ("feature starts: ", feature_starts)
+
+        return feature_starts, []
 
     #
     def compute_trial_courses_ROI_code04_trigger(self,
                                                  recording,
-                                                   root_dir,
-                                                   feature_name,
-                                                   lockout_window,
-                                                   n_sec_window,
-                                                   recompute,
-                                                   midline_filter_flag,
-                                                   save_stm_flag,
-                                                   transform_data_flag,
-                                                   use_fixed_filter_flag,
-                                                   fname_filter,
-                                                   pca_denoise_flag
-                                                ):   # THIS IS THE DFF TIEM COURSE WINDOW; e.g. -10..+10sec
+                                                 root_dir,
+                                                 feature_name,
+                                                 lockout_window,
+                                                 n_sec_window,
+                                                 recompute,
+                                                 midline_filter_flag,
+                                                 save_stm_flag,
+                                                 transform_data_flag,
+                                                 use_fixed_filter_flag,
+                                                 fname_filter,
+                                                 pca_denoise_flag
+                                                 ):   # THIS IS THE DFF TIEM COURSE WINDOW; e.g. -10..+10sec
 
 
         # SET PARAMETERS
@@ -512,9 +586,13 @@ class ProcessCalcium():
         dff_method = 'globalAverage'
 
         #
-        locs_selected, locs_selected_with_lockout = self.get_04_triggers_with_lockout(root_dir,
-                                                                                     recording,
-                                                                                     lockout_window)
+        if self.whole_stack == True:
+            locs_selected, locs_selected_with_lockout = self.get_triggers_bodyparts_whole_stack(recording)
+
+        else:
+            print (" This notebook only used for whole stack, exiting")
+            return
+
         #
         if len(locs_selected)==0:
             print (" ... session has no lever pulls ", recording)
@@ -546,6 +624,11 @@ class ProcessCalcium():
                                              fname_filter,
                                              pca_denoise_flag
                                              )
+
+        # just compute PCA and return;
+        if self.feature_name=="whole_stack":
+            return
+
 
         # GENERATE SAVE FILENAMES FOR LOCKOUT DATA
         fname_04 = (root_dir + '/tif_files/' + recording + '/' + recording + "_"+feature_name+
@@ -696,6 +779,14 @@ class ProcessCalcium():
                                      fname_filter,
                                      pca_denoise_flag):
 
+        fname_time_filters = fname_04[:-4]+"_pca_"+str(self.pca_explained_var_val)+".npy"
+        fname_pca = fname_04[:-4]+"_pca.pkl"
+
+        if os.path.exists(fname_pca):
+            print ("  ... data already processed", fname_pca)
+            return
+
+        #
         self.fname_04 = fname_04
         from tqdm import trange
         if self.pca_etm:
@@ -723,7 +814,7 @@ class ProcessCalcium():
         ########################################################
         # return if DFF data is none
         if data_stm.shape[0]==0:
-            print ("data_stm is empty (could not compute stm, skipping)", recording)
+            print ("data_stm is empty (could not compute stm, skipping : ", recording, " )")
             return
 
         # save data_stm stack
@@ -737,8 +828,9 @@ class ProcessCalcium():
             fname_pca = fname_04[:-4]+"_pca.pkl"
 
             # USE EXISTING 10SEC PCA OBJECT; NO NEED DO RECOMPUTE IT
-            if os.path.exists(fname_pca)==False:
-                fname_pca = fname_pca.replace('15sec','10sec')
+            if self.feature_name!='whole_stack':
+                if os.path.exists(fname_pca)==False:
+                    fname_pca = fname_pca.replace('15sec','10sec')
 
             if os.path.exists(fname_pca)==False:
 
@@ -756,9 +848,20 @@ class ProcessCalcium():
                 pca = pk.load(file)
 
             # compute PCA denoised STM for regular data;
-            pca_etm_time_filters, pca_etm_spatial_filters = self.get_pca_filters(pca, data_stm)
-            np.save(fname_04[:-4]+"_pca_"+str(self.pca_explained_var_val)+".npy", pca_etm_time_filters)
-            np.save(fname_04[:-4]+"_pca_"+str(self.pca_explained_var_val)+"_spatial.npy", pca_etm_spatial_filters)
+            if True:
+                pass
+                #pca_etm_time_filters, pca_etm_spatial_filters = self.get_pca_filters_whole_stack(pca, data_stm)
+
+                #np.save(fname_04[:-4]+"_pca_"+str(self.pca_explained_var_val)+".npy", pca_etm_time_filters)
+                #np.save(fname_04[:-4]+"_pca_"+str(self.pca_explained_var_val)+"_spatial.npy", pca_etm_spatial_filters)
+
+
+            else:
+                pca_etm_time_filters, pca_etm_spatial_filters = self.get_pca_filters(pca, data_stm)
+
+
+                np.save(fname_04[:-4]+"_pca_"+str(self.pca_explained_var_val)+".npy", pca_etm_time_filters)
+                np.save(fname_04[:-4]+"_pca_"+str(self.pca_explained_var_val)+"_spatial.npy", pca_etm_spatial_filters)
 
         # compute ROI based etms
         else:
@@ -781,81 +884,91 @@ class ProcessCalcium():
         ########## COMPUTE CONTROL/RANDOM DATA #################
         ########################################################
         # generate random time courses
-        def get_random_times_outside_locs_selected(locs_selected,
-                                                   random_lockout,
-                                                   data_stm):
+        if self.feature_name!="whole_stack":
+
+            locs_selected = get_random_times_outside_locs_selected(locs_selected,
+                                                                   self.random_events_lockout,
+                                                                   data_stm)
+
+            np.savetxt(fname_04[:-4]+"_locs_selected_random.txt" , locs_selected)
+
+
+            #locs_selected = np.float32(np.linspace(30, 1100, data_stm.shape[0]))
+            #locs_selected = locs_selected + np.random.rand(locs_selected.shape[0])*10-5
+            data_stm = None # zero out data_stm
+
             #
-            random_selected = []
-            for k in range(10000):
-                time = np.random.rand()*1200 + self.n_sec_window  # assumes data chunk is at least 1200 seconds
+            # DFF for random data
+            data_stm_random = self.compute_DFF_function(
+                                    root_dir,
+                                    dff_method, # 'globalAverage' or 'slidingWindow'
+                                    recording,
+                                    locs_selected,
+                                    n_sec_window
+                                    )
 
-                if np.min(np.abs(time-locs_selected))>random_lockout:
-                    random_selected.append(time)
+            if data_stm_random is None or data_stm_random.shape[0]==0:
 
-                if len(random_selected)==data_stm.shape[0]:
-                    # print ("Found sufficient randomized data chunks")
-                    break
+                return
 
-            if k==10000:
-                print ("Not enough random data chunkcs could not be generated with lockout window size: ",
-                       self.random_events_lockout)
-                return None
+            # pca denoise
+            if self.pca_etm:
 
-            random_selected = np.sort(random_selected)
-            return random_selected
+                # use the PCA transform from above to denoise the random data also:
+                pca_etm_time_filters, pca_etm_spatial_filters = self.get_pca_filters(pca, data_stm_random)
+                np.save(fname_random[:-4]+"_pca_"+str(self.pca_explained_var_val)+".npy", pca_etm_time_filters)
+                np.save(fname_random[:-4]+"_pca_"+str(self.pca_explained_var_val)+"_spatial.npy", pca_etm_spatial_filters)
 
-        locs_selected = get_random_times_outside_locs_selected(locs_selected,
-                                                               self.random_events_lockout,
-                                                               data_stm)
+            else:
 
-        np.savetxt(fname_04[:-4]+"_locs_selected_random.txt" , locs_selected)
+                # compute random trial time courses
+                _, trial_courses_random = self.sum_pixels_in_registered_mask(data_stm_random, maskwarp)
+                data_stm_random = None
 
+                #####################################################################
+                ######## REMOVE INFINITIES, NANS ETC FROM DATA ######################
+                #####################################################################
+                if trial_courses.shape[0]==0 or trial_courses_random.shape[0]==0:
+                    return np.zeros((0), 'float32'), np.zeros((0), 'float32')
 
-        #locs_selected = np.float32(np.linspace(30, 1100, data_stm.shape[0]))
-        #locs_selected = locs_selected + np.random.rand(locs_selected.shape[0])*10-5
-        data_stm = None # zero out data_stm
-
-        #
-        # DFF for random data
-        data_stm_random = self.compute_DFF_function(
-                                root_dir,
-                                dff_method, # 'globalAverage' or 'slidingWindow'
-                                recording,
-                                locs_selected,
-                                n_sec_window
-                                )
-
-        if data_stm_random is None or data_stm_random.shape[0]==0:
-            
-            return
-
-        # pca denoise
-        if self.pca_etm:
-
-            # use the PCA transform from above to denoise the random data also:
-            pca_etm_time_filters, pca_etm_spatial_filters = self.get_pca_filters(pca, data_stm_random)
-            np.save(fname_random[:-4]+"_pca_"+str(self.pca_explained_var_val)+".npy", pca_etm_time_filters)
-            np.save(fname_random[:-4]+"_pca_"+str(self.pca_explained_var_val)+"_spatial.npy", pca_etm_spatial_filters)
-
-        else:
-
-            # compute random trial time courses
-            _, trial_courses_random = self.sum_pixels_in_registered_mask(data_stm_random, maskwarp)
-            data_stm_random = None
-
-            #####################################################################
-            ######## REMOVE INFINITIES, NANS ETC FROM DATA ######################
-            #####################################################################
-            if trial_courses.shape[0]==0 or trial_courses_random.shape[0]==0:
-                return np.zeros((0), 'float32'), np.zeros((0), 'float32')
-
-            # remove infinities from both trial and randomized data
-            trial_courses_fixed, trial_courses_random_fixed = self.fix_trials(trial_courses,
-                                                                              trial_courses_random)
-            np.save(fname_random, trial_courses_random_fixed)
-            np.save(fname_04, trial_courses_fixed)
+                # remove infinities from both trial and randomized data
+                trial_courses_fixed, trial_courses_random_fixed = self.fix_trials(trial_courses,
+                                                                                  trial_courses_random)
+                np.save(fname_random, trial_courses_random_fixed)
+                np.save(fname_04, trial_courses_fixed)
 
         # return trial_courses_fixed, trial_courses_random_fixed
+
+
+    def get_pca_filters_whole_stack(self, pca):
+
+        # use set components for whole stack
+        self.pca_fixed_comps = self.pca_n_components
+        nComp = self.pca_fixed_comps
+
+        print ("NOT IMPLENETED YET ")
+        return
+        # load entire calcium imaging data and compute dff
+        fname_data = os.path.join(root_dir + '/tif_files/' + recording + '/' + recording + "_"+feature_name+
+                    "_trial_ROItimeCourses_"+str(n_sec_window)+"sec.npy")
+
+        #/media/cat/4TBSSD/yuki/IA1/tif_files/IA1pm_Feb1_30Hz/IA1pm_Feb1_30Hz_aligned_butterworth_0.1hz_6.0hz.npy
+        print ("DATA_STM: ", data_stm.shape)
+        X = data_stm.reshape(data_stm.shape[0]*data_stm.shape[1],
+                             data_stm.shape[2]*data_stm.shape[3])
+
+        #
+        print("    denoising data (pca.transofrm(X)) ")
+        time_filters = pca.transform(X)[:,:nComp]
+
+        time_filters = np.array(time_filters)
+        print("        done denoising data")
+        pca_time_filters = time_filters.reshape(data_stm.shape[0],
+                                                 data_stm.shape[1],
+                                                 -1).transpose(0,2,1)
+        pca_spatial_filters = pca.components_[:nComp,:]
+
+        return pca_time_filters, pca_spatial_filters
 
     def get_pca_filters(self, pca, data_stm):
 
@@ -871,6 +984,10 @@ class ProcessCalcium():
                     break
         else:
             # just select a fixed number of comps
+            nComp = self.pca_fixed_comps
+
+        if self.pca_n_components != 0:
+            self.pca_fixed_comps = self.pca_n_components
             nComp = self.pca_fixed_comps
 
         print ("DATA_STM: ", data_stm.shape)
@@ -1098,7 +1215,7 @@ class ProcessCalcium():
         fname_filter = '/media/cat/4TBSSD/yuki/IA1/tif_files/IA1am_Mar11_30Hz/IA1am_Mar11_30Hz_code_04_trial_ROItimeCourses_15sec_midline_filter.npy'
 
         #
-        feature_name = 'code_04'
+        feature_name = self.feature_name
         save_stm_flag = False         # flag to save raw stm maps [128 x 128 x n_times] files during processing
         transform_data_flag = False   # flag which reverts to using manually aligned/transformed data
 
@@ -1106,6 +1223,7 @@ class ProcessCalcium():
         pca_denoise_flag = False
 
         for name in names:
+            self.animal_id = name
             root_dir = self.main_dir + name
 
             temp_recs = np.load(root_dir + '/tif_files.npy')
@@ -1161,4 +1279,110 @@ class ProcessCalcium():
                                                                pca_denoise_flag)
 
 
+    # def generate_etm_whole_stack(self,
+    #                          names,
+    #                          n_sec_window,
+    #                          lockout_window,
+    #                          recompute,
+    #                          pca_etm,
+    #                          pca_explained_var_val,
+    #                          parallel=False,
+    #                          n_cores=2):
+    #
+    #     self.pca_etm = pca_etm
+    #
+    #     self.pca_explained_var_val = pca_explained_var_val
+    #
+    #     # midline filter params- TURN OFF FOR NOW
+    #     midline_filter_flag = False
+    #     use_fixed_filter_flag = False  # use filter from a single recording on all data
+    #     fname_filter = '/media/cat/4TBSSD/yuki/IA1/tif_files/IA1am_Mar11_30Hz/IA1am_Mar11_30Hz_code_04_trial_ROItimeCourses_15sec_midline_filter.npy'
+    #
+    #     #
+    #     feature_name = self.feature_name
+    #     save_stm_flag = False         # flag to save raw stm maps [128 x 128 x n_times] files during processing
+    #     transform_data_flag = False   # flag which reverts to using manually aligned/transformed data
+    #
+    #     #
+    #     pca_denoise_flag = False
+    #
+    #     for name in names:
+    #         self.animal_id = name
+    #         root_dir = self.main_dir + name
+    #
+    #         temp_recs = np.load(root_dir + '/tif_files.npy')
+    #         recordings =[]
+    #         for k in range(len(temp_recs)):
+    #             try:
+    #                 recordings.append(str(os.path.split(temp_recs[k])[1][:-4], "utf-8"))
+    #             except:
+    #                 recordings.append(os.path.split(temp_recs[k])[1][:-4])
+    #
+    #         print ("PROCESSING: ", name)
+    #
+    #         if parallel:
+    #             print ("TO IMPLMENET SELECTED SESSIONS IN PARALLEL")
+    #             res = parmap.map(self.compute_trial_courses_ROI_code04_trigger,
+    #                                recordings,
+    #                                root_dir,
+    #                                feature_name,
+    #                                lockout_window,
+    #                                n_sec_window,
+    #                                recompute,
+    #                                midline_filter_flag,
+    #                                save_stm_flag,
+    #                                transform_data_flag,
+    #                                use_fixed_filter_flag,
+    #                                fname_filter,
+    #                                pca_denoise_flag,
+    #                                pm_processes=n_cores,
+    #                                pm_pbar=True)
+    #         else:
+    #             for recording in tqdm(recordings):
+    #
+    #                 if self.skip_to != None:
+    #                     if self.skip_to in recording:
+    #                         self.skip_to = None
+    #                     print ("   skipping: ", recording)
+    #                     continue
+    #
+    #                 if  self.sessions in recording or self.sessions=='all':
+    #
+    #                     #
+    #                     self.compute_trial_courses_ROI_code04_trigger(recording,
+    #                                                            root_dir,
+    #                                                            feature_name,
+    #                                                            lockout_window,
+    #                                                            n_sec_window,
+    #                                                            recompute,
+    #                                                            midline_filter_flag,
+    #                                                            save_stm_flag,
+    #                                                            transform_data_flag,
+    #                                                            use_fixed_filter_flag,
+    #                                                            fname_filter,
+    #                                                            pca_denoise_flag)
+    #
 
+
+def get_random_times_outside_locs_selected(locs_selected,
+                                           random_lockout,
+                                           data_stm):
+    #
+    random_selected = []
+    for k in range(10000):
+        time = np.random.rand()*1200 + self.n_sec_window  # assumes data chunk is at least 1200 seconds
+
+        if np.min(np.abs(time-locs_selected))>random_lockout:
+            random_selected.append(time)
+
+        if len(random_selected)==data_stm.shape[0]:
+            # print ("Found sufficient randomized data chunks")
+            break
+
+    if k==10000:
+        print ("Not enough random data chunkcs could not be generated with lockout window size: ",
+               self.random_events_lockout)
+        return None
+
+    random_selected = np.sort(random_selected)
+    return random_selected

@@ -56,18 +56,22 @@ class Visualize():
         ''' Formats plots for decision choice with 50% and 0 lines
         '''
        # meta data
-        xlims = [-self.window+1,0]
+        try:
+            xlims = [self.xlim[0],self.xlim[1]]
+        except:
+            xlims = [-self.window+1,0]
+
         ylims = [0.4,1.0]
         ax.plot([0,0],
                  [ylims[0],ylims[1]],
-                 'r--',
+                 '--',
                 linewidth=3,
                  color='black',
                 alpha=.5)
 
         ax.plot([xlims[0],xlims[1]],
                  [0.5,0.5],
-                 'r--',
+                 '--',
                 linewidth=3,
                  color='black',
                 alpha=.5)
@@ -85,14 +89,14 @@ class Visualize():
         ylims = [0.0,1.0]
         ax.plot([0,0],
                  [ylims[0],ylims[1]],
-                 'r--',
+                 '--',
                 linewidth=3,
                  color='black',
                 alpha=.5)
 
         ax.plot([xlims[0],xlims[1]],
                  [0.1,0.1],
-                 'r--',
+                 '--',
                 linewidth=3,
                  color='black',
                 alpha=.5)
@@ -104,16 +108,15 @@ class Visualize():
 
     def get_fname(self): # load ordered sessions from file
 
-        self.sessions = np.load(os.path.join(self.main_dir, self.animal_id,'tif_files.npy'))
+        data = np.load(os.path.join(self.main_dir, self.animal_id,'tif_files.npy'))
 
-        data = []
-        for k in range(len(self.sessions)):
-            data.append(os.path.split(self.sessions[k])[1][:-4])
-        self.sessions = data
+        #
+        self.sessions = []
+        for k in range(len(data)):
+            self.sessions.append(os.path.split(data[k])[1].replace('.tif',''))
 
         #
         self.session = None
-        # print (self.session_id)
         for k in range(len(self.sessions)):
             if str(self.session_id) in str(self.sessions[k]):
                 self.session = self.sessions[k]
@@ -171,8 +174,8 @@ class Visualize():
 
         # convert wild card file name into correct filename for animal
         main_dir = os.path.join(self.main_dir,
-                                 self.animal_id,
-                                 'tif_files')
+                                self.animal_id,
+                                'tif_files')
         session_corrected = os.path.split(
                             glob2.glob(main_dir+"/*"+self.session_id+"*")[0])[1]
         #print ("Session corrected: ", session_corrected)
@@ -185,8 +188,10 @@ class Visualize():
                                  # self.session_id,
                                  # self.session_id+
                                  session_corrected,
-                                 session_corrected+
-                                 "_all_locs_selected.txt")
+                                 session_corrected+"_"+
+                                 self.code+
+                                 "_trial_ROItimeCourses_"+str(self.window)+
+                                 "sec_locs_selected.txt")
 
         if os.path.exists(fname_txt)==False:
             # print ("missing all locs file: ", fname_txt)
@@ -331,9 +336,43 @@ class Visualize():
 
         self.data = data['accuracy']
 
+
+        # LOAD SHIFTS FROM CORRELATION ANALYSIS AND COMPUTE PEAKS
+        if self.shift_flag:
+            fname_correlate = os.path.join(self.main_dir, self.animal_id,
+                                 'tif_files', self.session,
+                                'correlate.npz')
+
+            data = np.load(fname_correlate,allow_pickle=True)
+            cors = data['cors'].squeeze().T
+
+                #vis.shift = 0
+            print ("SELF SHIFT ID: ", self.shift_id)
+            if len(self.shift_id_str)>1:
+                self.shift_id = int(self.shift_id_str[0])
+                self.shift_additional = float(self.shift_id_str[1:])
+            else:
+                self.shift_id = int(self.shift_id_str)
+                self.shift_additional = 0
+
+            print ( " using shift: ", self.shift_id+self.shift_additional)
+
+            corr_featur_id = self.shift_id
+
+            temp_trace = cors[:,corr_featur_id]
+            temp_trace[:2000] = 0
+            temp_trace[-2000:] = 0
+            self.shift = round(np.argmax(temp_trace)/1000. - 15.,2)+self.shift_additional
+            print ("SHIFT Loaded: ", self.shift)
+
+        #
+        print ("... shift applied: ", self.shift)
+        self.data = np.roll(self.data,int(self.shift*self.imaging_rate),axis=0)
+
         # grab only first half:
-        self.data = self.data[:(self.data.shape[0]+
-                                self.sliding_window)//2]
+        # if self.show_all_times == False:
+        #     self.data = self.data[:(self.data.shape[0]+
+        #                         self.sliding_window)//2]
 
         print ("LOADED: DATA" , self.data.shape)
 
@@ -372,9 +411,23 @@ class Visualize():
 
         #
         self.mean = mean
+        print (self.mean.shape)
 
         #
         self.std = np.std(self.data, axis=1)
+
+
+        # clip the data to the required values
+        self.data = self.data[(self.xlim[0]+self.window)*30:
+                              (self.xlim[1]+self.window)*30]
+
+        self.mean = self.mean[(self.xlim[0]+self.window)*30:
+                              (self.xlim[1]+self.window)*30]
+        print ("self mean: ", self.mean.shape)
+
+        self.std = self.std[(self.xlim[0]+self.window)*30:
+                              (self.xlim[1]+self.window)*30]
+
 
     def process_session_concatenated(self):
 
@@ -481,7 +534,7 @@ class Visualize():
         self.sig_save = np.array(sig).copy()
         print ("Self sig save: ", self.sig_save.shape)
 
-        # multiple hypothesis test
+        # multiple hypothesis test Benjamini-Hockberg
         temp = np.array(sig)
         print ("data into multi-hypothesis tes:", temp.shape)
         temp2 = multipletests(temp, alpha=self.significance, method='fdr_bh')
@@ -500,8 +553,22 @@ class Visualize():
         sig[:,idx] = np.nan
 
         # use only first half
-        self.sig =sig #[ :,:sig.shape[1]//2]
+        self.sig = sig #[ :,:sig.shape[1]//2]
         print ("Final sig: ", self.sig.shape)
+
+        # find earliest significant;
+        earliest_continuous = 0
+        for k in range(self.sig.shape[1]-1,0,-1):
+            if self.sig[0][k]<=self.significance:
+                earliest_continuous = k
+            else:
+                break
+
+        print ("earliest: ", earliest_continuous,
+               " in sec: ", -(self.sig.shape[1]-earliest_continuous)/30.)
+
+        self.earliest_continuous = earliest_continuous
+
 
 
     def compute_first_decoding_time(self, lockouts=[False, True]):
@@ -1043,66 +1110,55 @@ class Visualize():
 
     def plot_significant(self, clr, label):
 
-        #
-        #ax=plt.subplot(111)
-
-        # get session name from ordered list; get
+        # GET FILENAME IF EXISTS
         self.get_fname()
-
-        #
         if self.fname is None:
-            print ("exiting")
+            print ("no file, exiting")
             return
 
-        #
+        # PROCESS SESSION
         self.process_session()
         print ("post process: ", self.data.shape)
-        #
-        #print ("self.mean:", self.mean)
-        t = np.linspace(-self.window+1, 0,
-                        self.mean.shape[0])
+        self.n_trials_plotting.append(self.n_trials)
+        if self.n_trials==0 or self.data.shape[0]==0:
+            return
+        print ("self n trials: ", self.n_trials)
 
-        #
+        # COMPUTE TIME WINDOW FOR PLOTTING
+        t = np.linspace(self.xlim[0], self.xlim[1], self.mean.shape[0])
         plt.plot(t,
                  self.mean,
                  c=clr,
-                 label = label,
+                 label = label + " # trials: "+str(self.n_trials),
                  linewidth=self.linewidth,
                  alpha=self.alpha)
         plt.fill_between(t, self.mean-self.std, self.mean+self.std, color=clr, alpha = 0.2)
 
-        # compute significance
+        # COMPUTE SIGNIFICANCE
         self.compute_significance()
-        # find earliest significant;
-        earliest_continuous = 0
-        #print ("self sig: ", self.sig.shape)
-        for k in range(self.sig.shape[1]-1,0,-1):
-            if self.sig[0][k]<=self.significance:
-                earliest_continuous = k
-            else:
-                break
 
-        print ("earliest: ", earliest_continuous,
-               " in sec: ", -(self.sig.shape[1]-earliest_continuous)/30.)
-
-
-        self.ax.annotate("EDT: "+str(round(-(self.sig.shape[1]-earliest_continuous)/30.,1))+"sec",
-                         xy=(-(self.sig.shape[1]-earliest_continuous)/30., 0.5),
-                         xytext=(-(self.sig.shape[1]-earliest_continuous)/30.-10, 0.7),
+        if self.show_EDT:
+            self.ax.annotate("EDT: "+str(round(-(self.sig.shape[1]-self.earliest_continuous)/30.,1))+"sec",
+                         xy=(-(self.sig.shape[1]-self.earliest_continuous)/30., 0.5),
+                         xytext=(-(self.sig.shape[1]-self.earliest_continuous)/30.-10, 0.7+self.edt_offset),
                          arrowprops=dict(arrowstyle="->"),
                          fontsize=20,
                          color=clr)
-        x = -(self.sig.shape[1]-earliest_continuous)/30.
-        plt.fill_between([x,0], 0,1.0 ,
-                         color='grey',alpha=.2)
-        # set
+            self.edt_offset+=0.02
+            x = -(self.sig.shape[1]-self.earliest_continuous)/30.
+
+            #
+            if False:
+                plt.fill_between([x,0], 0,1.0 ,
+                             color='grey',alpha=.2)
+
+        # PLOT SIGNIFICANCE IMAGE BARS
         vmin=0.0
         vmax=self.significance
-
-        # plot significance
         axins = self.ax.inset_axes((0,1-self.cbar_thick-self.cbar_offset,1,self.cbar_thick))
         axins.set_xticks([])
         axins.set_yticks([])
+
         im = axins.imshow(self.sig,
                           vmin=vmin,
                           vmax=vmax,
@@ -1116,21 +1172,47 @@ class Visualize():
         #fmt = '%1.4f'
         fmt='%.0e'
         #
-        cbar = self.fig.colorbar(im,
-                            ax=self.ax,
-                            shrink=0.2,
-                            ticks=ticks,
-                            format = fmt)
+        if self.cbar:
+            cbar = self.fig.colorbar(im,
+                                ax=self.ax,
+                                shrink=0.2,
+                                ticks=ticks,
+                                format = fmt)
 
-        cbar.ax.tick_params(labelsize=25)
+            cbar.ax.tick_params(labelsize=25)
 
+        # APPLY STANDARD FORMATS
         self.format_plot(self.ax)
-        plt.title(self.animal_id + "  session: "+str(self.session))
+
+        #
+        try:
+            fname = os.path.join(self.main_dir, self.animal_id,
+                     'tif_files',
+                     self.session,
+                     'shift.txt'
+                     )
+
+            print (fname)
+            shift = float(np.loadtxt(fname))
+
+        except:
+            shift = 0
+
+        if self.show_title:
+            plt.title(self.animal_id + "  session: "+str(self.session) +
+                  "\n smoothing window: "+str(round(self.smooth_window/30.,1))+"sec"+
+                  "\n [Ca] <-> DLC shift: "+str(round(shift,2))+" sec")
 
         #
         self.cbar_offset+=self.cbar_thick
+        if self.show_legend:
+            plt.legend(loc=self.legend_location,
+                   fontsize=20)
 
+        # for multi axes plots
+        self.plotted = True
 
+    #
     def plot_significant_concatenated(self, clr, label):
 
         #
@@ -1443,7 +1525,7 @@ class Visualize():
 
             #
             ax2.plot(t, np.poly1d(np.polyfit(t, auc2, 1))(t),
-                     'r--', linewidth=4,
+                     '--', linewidth=4,
                      c=self.colors[self.clr_ctr])
 
             self.clr_ctr+=1
