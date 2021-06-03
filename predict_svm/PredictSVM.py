@@ -12,6 +12,9 @@ import torch
 import pickle as pk
 
 import sklearn
+from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import RandomForestClassifier
+
 from sklearn.svm import SVC # "Support vector classifier"
 import matplotlib.patches as mpatches
 from sklearn.model_selection import KFold
@@ -121,48 +124,69 @@ class PredictMultiState():
         self.X = self.data
         self.y = self.labels
 
-    def pre_svm_prepare_data(self):
+    def prepare_and_run_svm(self):
 
         print ("Trials stack (make sure same across D1): ", self.trials.shape)
         for k in range(len(self.trials)):
             print (k, " size: ", self.trials[k].shape)
 
         # select window
-        for t in range(0, self.trials[0].shape[1], self.sliding_window_step):
-            t1 = t
-            t2 = t + self.window
+        t_array = np.arange(0, self.trials[0].shape[1], self.sliding_window_step)
 
-            trials_window = self.trials[:,:,t1:t2]
-            print (trials_window.shape)
+        if self.parallel:
+            self.acc = parmap.map(run_classifier, t_array,
+                                  self.window,
+                                  self.trials,
+                                  self.classifier,
+                                  pm_pbar=True,
+                                  pm_processes = self.n_cores
+                                  )
+        else:
+            self.acc = []
+            for t in t_array:
+                self.acc.append(run_classifier(t,
+                                self.window,
+                                self.trials,
+                                self.classifier))
 
-            trials_window_flat = trials_window.reshape(trials_window.shape[0],
-                                                       trials_window.shape[1],
-                                                       -1)
-            print (trials_window_flat.shape)
 
-            # 10-fold split; should we randomize?
-            idx = np.array_split(np.random.choice(np.arange(trials_window_flat.shape[1]),
-                                                  trials_window_flat.shape[1], replace=False),
-                                 10)
-            print ("idx: ", idx)
 
-            if self.parallel:
-                acc = parmap.map(svm_10fold, np.arange(10),
-                           idx,
-                           trials_window_flat,
-                           pm_processes = self.n_cores)
-            else:
-                acc = []
-                for k in range(10):
-                    acc.append(svm_10fold(k, idx, trials_window_flat))
+def run_classifier(t,
+                   window,
+                   trials,
+                   classifier,
+                   ):
 
-            print (acc)
-            # run 10-fold prediction;
-            # can parallelize this loop
+    #
+    t1 = t
+    t2 = t + window
 
-def svm_10fold(k,
+    trials_window = trials[:,:,t1:t2]
+    #print (trials_window.shape)
+
+    trials_window_flat = trials_window.reshape(trials_window.shape[0],
+                                               trials_window.shape[1],
+                                               -1)
+    #print (trials_window_flat.shape)
+
+    # 10-fold split; should we randomize?
+    idx = np.array_split(np.random.choice(np.arange(trials_window_flat.shape[1]),
+                                          trials_window_flat.shape[1], replace=False),
+                         10)
+    #
+    acc = []
+    for k in range(10):
+        acc.append(run_10fold(k, idx, trials_window_flat, classifier))
+
+    return acc
+
+    # run 10-fold prediction;
+    # can parallelize this loop
+
+def run_10fold(k,
                idx,
                trials_window_flat,
+               classifier,
                ):
 
     #
@@ -173,7 +197,7 @@ def svm_10fold(k,
         y_test.append(np.zeros(X_test[f].shape[0])+f)
     y_test = np.hstack(y_test)
     X_test = X_test.reshape(-1, X_test.shape[2])
-    print ("X_test: ", X_test.shape, " y_test: ", y_test.shape)
+    #print ("X_test: ", X_test.shape, " y_test: ", y_test.shape)
 
     #
     idx_train = np.delete(np.arange(trials_window_flat.shape[1]), idx[k])
@@ -191,33 +215,60 @@ def svm_10fold(k,
     y_train = np.hstack(y_train)
     #print ("X_train: ", X_train.shape, " y_train: ", y_train.shape)
 
+    # STANDARDIZE DATA
+    scaler = StandardScaler()
+    X_train = scaler.fit_transform(X_train)
+    X_test = scaler.transform(X_test)
+
     #
     # Fit SVM/Classifier
-    acc = run_multi_variate_single(X_train, y_train, X_test, y_test)
 
+    if classifier == 'svm':
+        acc = run_svm_multi_variate(X_train, y_train, X_test, y_test)
+    elif classifier == 'random_forest':
+        acc = run_random_forest_multi_variate(X_train, y_train, X_test, y_test)
+    else:
+        print ("Classifer uknonwn")
+        return None
     return acc
 
 # X_train, X_test, y_train, y_test =
 
-def run_multi_variate_single(X_train, y_train, X_test, y_test):
+def run_svm_multi_variate(X_train, y_train, X_test, y_test):
 
-   # print ("y_train: ", y_train.shape)
-   # print ("y_test: ", y_test.shape)
-
-    linear = svm.SVC(kernel='linear', C=1, decision_function_shape='ovo').fit(X_train, y_train)
-    rbf = svm.SVC(kernel='rbf', gamma=1, C=1, decision_function_shape='ovo').fit(X_train, y_train)
-    poly = svm.SVC(kernel='poly', degree=3, C=1, decision_function_shape='ovo').fit(X_train, y_train)
+    #linear = svm.SVC(kernel='linear', C=1, decision_function_shape='ovo').fit(X_train, y_train)
+    #rbf = svm.SVC(kernel='rbf', gamma=1, C=1, decision_function_shape='ovo').fit(X_train, y_train)
+    #poly = svm.SVC(kernel='poly', degree=3, C=1, decision_function_shape='ovo').fit(X_train, y_train)
     sig = svm.SVC(kernel='sigmoid', C=1, decision_function_shape='ovo').fit(X_train, y_train)
 
     # retrieve the accuracy and print it for all 4 kernel functions
-    accuracy_lin = linear.score(X_test, y_test)
-    accuracy_poly = poly.score(X_test, y_test)
-    accuracy_rbf = rbf.score(X_test, y_test)
+    #accuracy_lin = linear.score(X_test, y_test)
+    #accuracy_poly = poly.score(X_test, y_test)
+    #accuracy_rbf = rbf.score(X_test, y_test)
     accuracy_sig = sig.score(X_test, y_test)
 
     #
     return accuracy_sig
 
+
+def run_random_forest_multi_variate(X_train, y_train, X_test, y_test):
+
+    #  Fitting Random Forest Classification to the Training set
+    classifier = RandomForestClassifier(n_estimators=10,
+                                        n_jobs=1)
+    classifier.fit(X_train, y_train)
+
+    # # Predicting the Test set results
+    # y_pred = classifier.predict(X_test)
+    #
+    # #Reverse factorize (converting y_pred from 0s,1s and 2s to Iris-setosa, Iris-versicolor and Iris-virginica
+    # reversefactor = dict(zip(range(3),definitions))
+    # y_test = np.vectorize(reversefactor.get)(y_test)
+    # y_pred = np.vectorize(reversefactor.get)(y_pred)
+
+    accuracy_sig = classifier.score(X_test, y_test)
+
+    return accuracy_sig
 
 class PredictSVMTime():
 
