@@ -349,7 +349,7 @@ class ProcessCalcium():
         ##################################################
         data_stm = np.zeros((len(img_frame_triggers),(int(window)*2+1), 128, 128))
         counter = 0
-        for trigger in img_frame_triggers:
+        for trigger in tqdm(img_frame_triggers):
 
             # NOTE: STARTS AND ENDS OF RECORDINGS MAY NOT HAVE PROPER [Ca] DATA; MAY NEED TO SKIP MANUALLY
 
@@ -371,7 +371,6 @@ class ProcessCalcium():
                     continue  #Skip if too close to start/end
                 baseline = np.average(aligned_images[int(trigger-2*window):int(trigger-window)], axis=0)
                 data_stm.append((data_chunk-baseline)/baseline)
-
 
             # advance the counter
             counter+=1
@@ -504,7 +503,7 @@ class ProcessCalcium():
             data = np.load(fname, allow_pickle=True)
         except:
             print ("No video available: ", recording)
-            return [], []
+            return np.zeros((0)), np.zeros((0))
 
         #
         labels = data['labels']
@@ -514,7 +513,7 @@ class ProcessCalcium():
                 break
 
         #
-        feat = data['feature_movements']
+        feat = data['feature_quiescent']
         f = []
         for k in range(feat.shape[0]):
             temp = np.array(feat[k])#.T
@@ -555,7 +554,7 @@ class ProcessCalcium():
                 break
 
         #
-        feature_movements = np.array(data['feature_movements'][feature_id])
+        feature_movements = np.array(data['feature_quiescent'][feature_id])
         #print (fname, feature_id, feature_movements)
         if feature_movements.shape[0]<=1:
             feature_starts = np.zeros((0),'float32')
@@ -587,6 +586,7 @@ class ProcessCalcium():
 
 
         if self.verbose:
+            print ('')
             print ("   recording: ", recording)
 
         # SET PARAMETERS
@@ -595,6 +595,18 @@ class ProcessCalcium():
         #
         if self.whole_stack == True:
             locs_selected, locs_selected_with_lockout = self.get_triggers_bodyparts_whole_stack(recording)
+
+            # must also load locs for code_04 in cases where no movements / videos are present but we still want to
+            #  do dff whole stack
+            locs_selected_04, _ = self.get_04_triggers_with_lockout(root_dir,
+                                                                     recording,
+                                                                     lockout_window)
+
+            # add locs_selected from code_04 in order to make pca object and denoise datastack
+            if locs_selected.shape[0]==0:
+                locs_selected = locs_selected_04
+            elif locs_selected.shape[0]<100:
+                locs_selected = np.hstack((locs_selected, locs_selected_04))
 
         elif self.features=='code_04':
             locs_selected, locs_selected_with_lockout = self.get_04_triggers_with_lockout(root_dir,
@@ -624,6 +636,7 @@ class ProcessCalcium():
 
         # good idea to save these as text to see them after:
         fname_locs = fname_04[:-4]+"_locs_selected.txt"
+
         #if self.verbose:
         #    print ("fname-locs: ", fname_locs)
         np.savetxt(fname_locs, locs_selected)
@@ -889,14 +902,17 @@ class ProcessCalcium():
                                      fname_filter,
                                      pca_denoise_flag):
 
-        fname_time_filters = fname_04[:-4]+"_pca_"+str(self.pca_explained_var_val)+".npy"
-        fname_pca = fname_04[:-4]+"_pca.pkl"
+        if self.whole_stack:
+            fname_time_filters = fname_04[:-4]+"_pca"+str(self.pca_fixed_comps)+"components.npy"
+        else:
+            fname_time_filters = fname_04[:-4]+"_pca_"+str(self.pca_explained_var_val)+".npy"
 
         if os.path.exists(fname_time_filters):
             print ("  ... data already processed", fname_time_filters)
             return
 
         #
+        fname_pca = fname_04[:-4]+"_pca.pkl"
         self.fname_04 = fname_04
         if self.pca_etm:   # THis checks to see if time filters are already saved...
             fname_out_final =  fname_04[:-4]+"_pca_"+str(self.pca_explained_var_val)+".npy"  # time filter file
@@ -910,7 +926,7 @@ class ProcessCalcium():
                 return
 
         ########################################################
-        ########## COMPUTE DFF FOR TRIAL  DATA #################
+        ### COMPUTE DFF AND MAKE PCA OBJECT FOR TRIAL  DATA ####
         ########################################################
         if os.path.exists(fname_pca)==False or self.whole_stack==False:
             data_stm = self.compute_DFF_function(
@@ -920,7 +936,43 @@ class ProcessCalcium():
                                 locs_selected,
                                 n_sec_window
                                 )
-        elif self.whole_stack==True:
+
+            # return if DFF data is none
+            if data_stm.shape[0]==0:
+                print ("data_stm is empty (could not compute stm, skipping : ", recording, " )")
+                return
+
+            # # save data_stm stack
+            # if save_stm_flag:
+            #     fname_04_data_stm = fname_04[:-4]+"_all_brain.npy"
+            #     np.save(fname_04_data_stm, data_stm)
+
+            # PCA denoising
+            if self.pca_etm:
+
+                fname_pca = fname_04[:-4]+"_pca.pkl"
+
+                ####################################
+                ######## COMPUTE PCA STACK #########
+                ####################################
+                if os.path.exists(fname_pca)==False:
+
+                    pca = self.pca_object(data_stm)
+
+                    # save the pca object for each dataset:
+                    # print (" ... saving pca: ", fname_pca)
+                    pk.dump(pca, open(fname_pca,"wb"))
+
+        # load PCA pbject
+        file = open(fname_pca, 'rb')
+        pca = pk.load(file)
+
+        ####################################
+        ######## DENOISE DATA ##############
+        ####################################
+        # compute PCA denoised STM for regular data;
+        if self.whole_stack:
+
             # if computing_whol stack, data_stm is just the aligned filter entire dataset:
             fname = os.path.join(root_dir,'tif_files',
                                           recording,
@@ -932,81 +984,36 @@ class ProcessCalcium():
             if self.verbose:
                 print ("    data_stm: ", data_stm.shape)
 
-        # return if DFF data is none
-        if data_stm.shape[0]==0:
-            print ("data_stm is empty (could not compute stm, skipping : ", recording, " )")
-            return
 
-        # save data_stm stack
-        if save_stm_flag:
-            fname_04_data_stm = fname_04[:-4]+"_all_brain.npy"
-            np.save(fname_04_data_stm, data_stm)
+            pca_etm_time_filters, pca_etm_spatial_filters = self.get_pca_filters_whole_stack(pca,
+                                                                                             data_stm)
 
-        # PCA denoising
-        if self.pca_etm:
-
-            fname_pca = fname_04[:-4]+"_pca.pkl"
-
-            # USE EXISTING 10SEC PCA OBJECT; NO NEED DO RECOMPUTE IT
-            # this should not be used anymore; just recompute all PCA data always;
-            # if self.feature_name!='whole_stack':
-            #     if os.path.exists(fname_pca)==False:  # This should not be used anymore
-            #         fname_pca = fname_pca.replace('15sec','10sec')
-
-            ####################################
-            ######## COMPUTE PCA STACK #########
-            ####################################
-            if os.path.exists(fname_pca)==False:
-
-                pca = self.pca_object(data_stm)
-
-                # save the pca object for each dataset:
-                # print (" ... saving pca: ", fname_pca)
-                pk.dump(pca, open(fname_pca,"wb"))
-
-            else:
-                #print ("LOading pca: ", fname_pca)
-                file = open(fname_pca, 'rb')
-
-                #
-                pca = pk.load(file)
-
-            ####################################
-            ######## DENOISE DATA ##############
-            ####################################
-            # compute PCA denoised STM for regular data;
-            if self.whole_stack:
-
-                pca_etm_time_filters, pca_etm_spatial_filters = self.get_pca_filters_whole_stack(pca,
-                                                                                                 data_stm)
-
-                np.save(fname_04[:-4]+"_pca"+str(self.pca_fixed_comps)+"components.npy", pca_etm_time_filters)
-                np.save(fname_04[:-4]+"_pca"+str(self.pca_fixed_comps)+"components_spatial.npy", pca_etm_spatial_filters)
+            np.save(fname_04[:-4]+"_pca"+str(self.pca_fixed_comps)+"components.npy", pca_etm_time_filters)
+            np.save(fname_04[:-4]+"_pca"+str(self.pca_fixed_comps)+"components_spatial.npy", pca_etm_spatial_filters)
 
 
-            else:
-                pca_etm_time_filters, pca_etm_spatial_filters = self.get_pca_filters(pca, data_stm)
-
-
-                np.save(fname_04[:-4]+"_pca_"+str(self.pca_explained_var_val)+".npy", pca_etm_time_filters)
-                np.save(fname_04[:-4]+"_pca_"+str(self.pca_explained_var_val)+"_spatial.npy", pca_etm_spatial_filters)
-
-        # compute ROI based etms
         else:
-            # CONVERT DATA FROM 128 x 128 to 35 ROIs
-            # load Allen Institute afine transformation to scale data
-            if '4TBSSD' in self.main_dir:
-                suffix = '4TBSSD'
-            else:
-                suffix = '1TB'
-            maskwarp = np.load('/media/cat/'+suffix+'/yuki/maskwarp.npy')
+            pca_etm_time_filters, pca_etm_spatial_filters = self.get_pca_filters(pca, data_stm)
 
-            # accumulate mean activity in each ROI
-            # input data shape: [# trials, # times, width, height]
-            area_ids, trial_courses = self.sum_pixels_in_registered_mask(data_stm, maskwarp)
+            np.save(fname_04[:-4]+"_pca_"+str(self.pca_explained_var_val)+".npy", pca_etm_time_filters)
+            np.save(fname_04[:-4]+"_pca_"+str(self.pca_explained_var_val)+"_spatial.npy", pca_etm_spatial_filters)
 
-            # save area ids, time courses for event triggered and random data
-            np.save(fname_04[:-4]+ "_area_ids.npy", area_ids)
+        # # compute ROI based etms
+        # else:
+        #     # CONVERT DATA FROM 128 x 128 to 35 ROIs
+        #     # load Allen Institute afine transformation to scale data
+        #     if '4TBSSD' in self.main_dir:
+        #         suffix = '4TBSSD'
+        #     else:
+        #         suffix = '1TB'
+        #     maskwarp = np.load('/media/cat/'+suffix+'/yuki/maskwarp.npy')
+        #
+        #     # accumulate mean activity in each ROI
+        #     # input data shape: [# trials, # times, width, height]
+        #     area_ids, trial_courses = self.sum_pixels_in_registered_mask(data_stm, maskwarp)
+        #
+        #     # save area ids, time courses for event triggered and random data
+        #     np.save(fname_04[:-4]+ "_area_ids.npy", area_ids)
 
         ########################################################
         ########## COMPUTE CONTROL/RANDOM DATA #################
@@ -1294,11 +1301,13 @@ class ProcessCalcium():
                              data_stm.shape[2]*data_stm.shape[3])
 
         # subselect data
-        n_selected = min(X.shape[0]//10, 10000)
+        n_selected = min(X.shape[0], 5000)
         idx = np.random.choice(np.arange(X.shape[0]),
                                n_selected,
                                replace=False)
         X_select = X[idx]
+        if self.verbose:
+            print ("   fitting PCA...", X_select.shape)
 
         pca = PCA()
         pca.fit(X_select)

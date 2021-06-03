@@ -405,7 +405,7 @@ def generate_movement_starts(session,
                              lockout_window,
                              labels,
                              n_processes=10,
-                             make_sample_video=True):
+                             make_sample_video=False):
 
     # first, check if session has a video and it has been processed:
     print (animal_id, session)
@@ -421,6 +421,7 @@ def generate_movement_starts(session,
         print ("Couldn't find video / processed file, skipping")
         return
     fname_h5 = fname_h5[0]
+
     #
     fname_out = os.path.join(root_dir, animal_id,'tif_files',
                              session,
@@ -472,18 +473,19 @@ def generate_movement_starts(session,
         all_chunks = []
         for p in range(1,idx.shape[0],1):
             if (idx[p]-idx[p-1])>= (lockout_window*fps):
-                #all_chunks.append([idx[p-1]/fps+video_shift, idx[p]/fps+video_shift])
+                # all_chunks.append([idx[p-1]/fps+video_shift, idx[p]/fps+video_shift])
                 all_chunks.append([idx[p-1]/fps, idx[p]/fps])
 
         print ("  # of complete quiescent periods: ", len(all_chunks))
 
         np.savez(fname_out,
-                 feature_movements = feature_chunks,
-                 feature_movements_times = movements,
-                 all_feature_movements = all_chunks,
+                 feature_quiescent = feature_chunks,
+                 feature_initiations = movements,
+                 all_quiescent = all_chunks,
                  labels = labels,
                  video_shift = video_shift
                  )
+
         if make_sample_video:
             start = 0
             end = 1000
@@ -530,14 +532,16 @@ def get_movements(fname_vid,
     max_x = int(np.max(traces[:,:,0]))
     max_y = int(np.max(traces[:,:,1]))
     print ('vid size : ', max_x, max_y)
+
+    # scale threshold for detection
     if max_x > 660:
         #print ("increasing movement threhsold for 1280 x 720 vid")
         movement_threshold = int(movement_threshold*max_x/660)
 
 
     #
-    traces_filtered = []
-    starts_arrays_lockout = []  # this tracks only beginning of a movement following a lockout period
+    # traces_filtered = []
+    # starts_arrays_lockout = []  # this tracks only beginning of a movement following a lockout period
     movements = np.zeros((traces.shape[0],traces.shape[1])) # This tracks any change in movement.
     for k in range(traces.shape[0]):
 
@@ -549,8 +553,8 @@ def get_movements(fname_vid,
                       (trace[1:,1]-trace[:-1,1])**2)
         idx = np.where(vel<=1)[0]
         vel[idx]=np.nan
-        median_vel = np.nanmedian(vel)
-        #print ("velocity: ", vel.shape, "  median vel: ", median_vel)
+        # median_vel = np.nanmedian(vel)
+        # print ("velocity: ", vel.shape, "  median vel: ", median_vel)
 
         #
         #
@@ -2122,61 +2126,68 @@ def find_quiet_periods_specific_length(starts_arrays, length_quiet_period):
 #
 def find_quiet_periods_specific_length_and_first_feature(starts_arrays,
                                                          length_quiet_period,
-                                                         fname):
+                                                         plotting=False):
 
     # discretize time in miliseconds
     time_bins = np.zeros((1400*1000),'int32')
+    starts_arrays = starts_arrays/15.  # CONVERT TO SECONDS
 
-    # bin all activity starts;
+    # bin all activity initiations into time_bins array
     for k in range(len(starts_arrays)):
         if k != 2:
             time_bins[np.int32(starts_arrays[k]*1000)]+=1
         else:
             print ("Excluding nose movement from assessment of overall body movement")
     #
-    ax=plt.subplot(2,1,1)
-    ax.plot(np.arange(time_bins.shape[0])/1E3,time_bins)
+    if plotting:
+        ax=plt.subplot(2,1,1)
+        ax.plot(np.arange(time_bins.shape[0])/1E3,time_bins)
 
     # find all quiet periods > 1 time step (i.e. 1 millisecond)
     idx = np.where(time_bins==0)[0]
+    print ("idx: ", idx.shape)
     starts = []
-    inside = []
-    inside.append([])
+    ends = []
     starts.append(idx[0])
-    ctr=0
     for k in range(1,idx.shape[0],1):
         if (idx[k]-idx[k-1])>1:
             starts.append(k)
-            inside.append([])
-            ctr+=1
-        else:
-            inside[ctr].append((k-1)/1E3)
+            ends.append(k-1)
+    #
+    if len(starts)>len(ends):
+        starts =starts[:-1]
+    print ("starts: ", starts)
+    #
     starts = np.array(starts)/1E3
-    inside = np.array(inside)
+    ends = np.array(ends)/1E3
+
+    quiet_periods = np.vstack((starts, ends)).T
+    print ("inits: ", quiet_periods.shape, quiet_periods)
 
     # get durations of quiet
-    durations = []
-    for k in range(len(starts)):
-        durations.append((inside[k][-1]-inside[k][0]))
-    durations = np.array(durations)
-
-    # show the starts of quiet periods
-    ax2=plt.subplot(2,1,2)
-    ax2.scatter(starts,durations)
+    durations = quiet_periods[:,1]-quiet_periods[:,0]
+    print ("durations: ", durations.shape, durations)
 
     # find periods above suggested lockout
     idx = np.where(durations>length_quiet_period)[0]
+    durations = durations[idx]
+    quiet_periods = quiet_periods[idx]
 
-    #
-    plt.scatter(starts[idx],durations[idx])
-    plt.title("Quiet period length: "+ str(length_quiet_period)+ "sec;    #: "+str(idx.shape[0]), fontsize=20)
-    plt.suptitle(os.path.split(fname)[1])
-    plt.show()
+    print ("durations > min: ", durations.shape, durations)
 
-    print ("# of quiet_periods longer than ", length_quiet_period, "   #", starts[idx].shape)
+    # show the starts of quiet periods
+    if plotting:
+        ax2=plt.subplot(2,1,2)
+        ax2.scatter(starts,durations)
 
+        plt.scatter(starts[idx],durations[idx])
+        plt.title("Quiet period length: "+ str(length_quiet_period)+ "sec;    #: "+str(idx.shape[0]), fontsize=20)
+        plt.suptitle(os.path.split(fname)[1])
+        plt.show()
 
-    return starts, durations, 'test'
+    print ("# of quiet_periods longer than ", length_quiet_period, "   #", quiet_periods.shape)
+
+    return quiet_periods
 
 def find_quiet_periods_all(starts_arrays):
 

@@ -5,6 +5,8 @@ import parmap
 import numpy as np
 import os
 import matplotlib.pyplot as plt
+import pickle
+
 
 import glob2
 import scipy
@@ -139,38 +141,34 @@ class Visualize():
         if self.pca_flag:
             prefix2 = '_pca_'+str(self.pca_var)
 
-        # print ("self.session: ", self.session)
-        # make fname out for animal + session
-        # fname = os.path.join(self.main_dir, self.animal_id,
-        #                      'SVM_Scores',
-        #                      'SVM_Scores_'+
-        #                      self.session+#"_"+
-        #                      self.code+
-        #                      prefix1+
-        #                      '_trial_ROItimeCourses_'+
-        #                      str(self.window)+'sec'+
-        #                      prefix2+
-        #                      '.npy'
-        #                      )
-
-        #
-        fname = os.path.join(self.main_dir, self.animal_id,
-                     'SVM_Scores',
+        if self.pickle==False:
+            #
+            fname = os.path.join(self.main_dir, self.animal_id,
+                         'SVM_Scores',
+                         'SVM_Scores_'+
+                         self.session+#"_"+
+                         self.code+
+                         prefix1+
+                         '_trial_ROItimeCourses_'+
+                         str(self.window)+'sec_'+
+                         "Xvalid"+str(self.xvalidation)+
+                         "_Slidewindow"+str(self.sliding_window)+
+                         #prefix2+
+                         '.npz'
+                         )
+        else:
+            # /media/cat/4TBSSD/yuki/IA1/SVM_Scores/SVM_Scores_IA1pm_Feb1_30Hz_whole_stack_pca30Components_window15sec_Xvalid10_Slidewindow30Frames_accuracy.pk
+            fname = os.path.join(self.main_dir, self.animal_id,'SVM_Scores',
                      'SVM_Scores_'+
-                     self.session+#"_"+
-                     self.code+
-                     prefix1+
-                     '_trial_ROItimeCourses_'+
-                     str(self.window)+'sec_'+
-                     "Xvalid"+str(self.xvalidation)+
-                     "_Slidewindow"+str(self.sliding_window)+
-                     #prefix2+
-                     '.npz'
+                     self.session+
+                     '_whole_stack_pca30Components_'+
+                     'window'+str(self.window)+"sec"+
+                     "_Xvalid"+str(self.xvalidation)+
+                     "_Slidewindow"+str(self.sliding_window)+"Frames"+
+                     '_accuracy.pk'
                      )
-
+        print ("SET FNAME: ", fname)
         self.fname = fname
-
-    def get_number_of_trials(self):
 
         # convert wild card file name into correct filename for animal
         main_dir = os.path.join(self.main_dir,
@@ -178,48 +176,120 @@ class Visualize():
                                 'tif_files')
         session_corrected = os.path.split(
                             glob2.glob(main_dir+"/*"+self.session_id+"*")[0])[1]
-        #print ("Session corrected: ", session_corrected)
+
+        self.session_corrected = session_corrected
 
 
-        # check to see if session done
-        fname_txt = os.path.join(self.main_dir,
-                                 self.animal_id,
-                                 'tif_files',
-                                 # self.session_id,
-                                 # self.session_id+
-                                 session_corrected,
-                                 session_corrected+"_"+
-                                 self.code+
-                                 "_trial_ROItimeCourses_"+str(self.window)+
-                                 "sec_locs_selected.txt")
 
-        if os.path.exists(fname_txt)==False:
-            # print ("missing all locs file: ", fname_txt)
-            self.n_trials = 0
-            self.n_trials_lockout = 0
-            return
+    def get_number_of_trials(self):
 
-        # check to see if lokcout or no lockout
-        if self.lockout==False:
-            self.n_trials = np.loadtxt(fname_txt).shape[0]
-        else:
+        ''' There are 4 types of trials so must load them individually
+        '''
+
+        # convert wild card file name into correct filename for animal
+        main_dir = os.path.join(self.main_dir,
+                                self.animal_id,
+                                'tif_files')
+        session_corrected = os.path.split(
+                            glob2.glob(main_dir+"/*"+self.session_id+"*")[0])[1]
+
+        self.session_corrected = session_corrected
+        #
+        if self.code == 'code_04':
+
+            # check to see if session done
             fname_txt = os.path.join(self.main_dir,
                                      self.animal_id,
                                      'tif_files',
+                                     # self.session_id,
+                                     # self.session_id+
                                      session_corrected,
-                                     session_corrected+"_lockout_"+
-                                     str(self.lockout_window)+
-                                     "sec_locs_selected.txt")
-
-            if os.path.exists(fname_txt)==False:
-                print ("missing lockout file: ", fname_txt)
+                                     session_corrected+"_all_locs_selected.txt")
+            try:
+                self.n_trials = np.loadtxt(fname_txt).shape[0]
+            except:
                 self.n_trials = 0
-                self.n_trials_lockout = 0
-                return
+        #
+        elif self.code == 'code_04_lockout':
+            fname_txt = os.path.join(self.main_dir,
+                                     self.animal_id,
+                                     'tif_files',
+                                     # self.session_id,
+                                     # self.session_id+
+                                     session_corrected,
+                                     session_corrected+"_lockout_10sec_locs_selected.txt")
+            try:
+                self.n_trials = np.loadtxt(fname_txt).shape[0]
+            except:
+                self.n_trials = 0
+        #
+        else:
+            fname_data = os.path.join(self.main_dir,
+                         self.animal_id,
+                         'tif_files',
+                         session_corrected,
+                         session_corrected+"_3secNoMove_movements.npz")
 
-            self.n_trials = np.loadtxt(fname_txt).shape[0]
+            data = np.load(fname_data, allow_pickle=True)
 
-        # print ("Loaded # trials: ", self.n_trials)
+            if self.code=='quiescence':
+                self.n_trials = data['all_quiescent'].shape[0]
+            else:
+
+                # find the code id
+                match_code = None
+                for p in range(len(self.labels)):
+                    if self.code in self.labels[p]:
+                        match_code = p
+                        break
+                self.n_trials = len(data['feature_quiescent'][match_code])
+
+
+
+
+    def get_lever_offset(self):
+
+        fname_lever_offset = os.path.join(self.main_dir,
+                                         self.animal_id,
+                                         'tif_files',
+                                         self.session_corrected,
+                                         self.session_corrected+"_lever_offset_n_frames.txt")
+
+        if os.path.exists(fname_lever_offset)==False:
+
+            images_file = fname_lever_offset.replace('_lever_offset_n_frames.txt','_aligned.npy')
+
+            aligned_images = np.load(images_file)
+
+            # Find blue light on/off
+            blue_light_threshold = 400  #Intensity threshold; when this value is reached - imaging light was turned on
+            start_blue = 0; end_blue = aligned_images.shape[0]
+
+            if np.average(aligned_images[0])> blue_light_threshold:    #Case #1: imaging starts with light on; need to remove end chunk; though likely bad recording
+                for k in range(len(aligned_images)):
+                    if np.average(aligned_images[k])< blue_light_threshold:
+                        #self.aligned_images = self.aligned_images[k:]
+                        end_blue = k
+                        break
+            else:                                                           #Case #2: start with light off; remove starting and end chunks;
+                #Find first light on
+                for k in range(len(aligned_images)):
+                    if np.average(aligned_images[k])> blue_light_threshold:
+                        start_blue = k
+                        break
+
+                #Find light off - count backwards from end of imaging data
+                for k in range(len(aligned_images)-1,0,-1):
+                    if np.average(aligned_images[k])> blue_light_threshold:
+                        end_blue= k
+                        break
+
+            self.lever_offset = start_blue
+
+            np.savetxt(fname_lever_offset, [self.lever_offset])
+
+        else:
+            self.lever_offset = int(np.loadtxt(fname_lever_offset))
 
     def plot_decision_choice_all(self):
 
@@ -326,28 +396,69 @@ class Visualize():
 
     def process_session(self):
 
-        #
-        try:
-            data = np.load(self.fname, allow_pickle=True)
-        except:
-            print( " ... data missing", self.fname)
-            self.data = np.zeros((0))
+        #################################################
+        ########### LOAD ACCURACY DATA ##################
+        #################################################
+        if self.pickle==False:
+            try:
+                data = np.load(self.fname, allow_pickle=True)
+            except:
+                print( " ... data missing", self.fname)
+                self.data = np.zeros((0))
+                return
+            self.data = data['accuracy']
+
+        # else load specific code data from file
+        else:
+            try:
+                with (open(self.fname, "rb")) as openfile:
+                    data = pickle.load(openfile)
+                print ("PICKLE DATA: ", len(data))
+            except:
+                print( " ... data missing", self.fname)
+                self.data = np.zeros((0))
+                return
+
+            # find the code id
+            match_code = None
+            for p in range(len(self.labels)):
+                if self.code in self.labels[p]:
+                    match_code = p
+                    break
+            self.data = np.array(data[match_code])
+
+        if self.data.shape[0]==0:
+            print ("COULDNT FIND DATA")
             return
 
-        self.data = data['accuracy']
+        print ("DATA; ", self.data.shape)
+
+        #################################################
+        ### LOAD SHIFTS BETWEEN LEVER AND CALCIUM #######
+        #################################################
+        self.get_lever_offset()
+        print ("loaded lever offset: ", self.lever_offset)
 
 
-        # LOAD SHIFTS FROM CORRELATION ANALYSIS AND COMPUTE PEAKS
+        #################################################
+        ######## LOAD SHIFTS FROM CORRELATION ANALYSIS ##
+        #################################################
         if self.shift_flag:
             fname_correlate = os.path.join(self.main_dir, self.animal_id,
                                  'tif_files', self.session,
                                 'correlate.npz')
 
-            data = np.load(fname_correlate,allow_pickle=True)
+            try:
+                data = np.load(fname_correlate,allow_pickle=True)
+            except:
+                print( " ... data missing", self.fname)
+                self.data = np.zeros((0))
+                return
+
             cors = data['cors'].squeeze().T
 
                 #vis.shift = 0
-            print ("SELF SHIFT ID: ", self.shift_id)
+            print ("SELF SHIFT ID: ", self.shift_id_str)
             if len(self.shift_id_str)>1:
                 self.shift_id = int(self.shift_id_str[0])
                 self.shift_additional = float(self.shift_id_str[1:])
@@ -366,33 +477,28 @@ class Visualize():
             print ("SHIFT Loaded: ", self.shift)
 
         #
-        print ("... shift applied: ", self.shift)
-        self.data = np.roll(self.data,int(self.shift*self.imaging_rate),axis=0)
+        if 'code_04' not in self.code:
+            print ("... DLC shift applied: ", self.shift)
+            self.data = np.roll(self.data,int(self.shift*self.imaging_rate),axis=0)
+        else:
+            print ("... DLC shift applied: ", 0)
 
-        # grab only first half:
-        # if self.show_all_times == False:
-        #     self.data = self.data[:(self.data.shape[0]+
-        #                         self.sliding_window)//2]
 
-        print ("LOADED: DATA" , self.data.shape)
+        #
+        print ("... LEVER OFFSET applied: ", self.lever_offset)
+        self.data = np.roll(self.data,-self.lever_offset,axis=0)
+        print (" rolled data: ", self.data.shape)
 
-        # get n trials for both lockout and all trials data
+
+        #################################################
+        ########### LOAD # TRIALS #######################
+        #################################################
         self.get_number_of_trials()
-        #print (" post trials data size ", self.data.shape)
+        print (" post trials data size ", self.data.shape)
 
         #
         if self.n_trials<self.min_trials:
             print ("Insufficient trials...", self.n_trials)
-            self.data = np.zeros((0))
-            return
-
-        # gets the corect filename to be loaded below
-        self.get_fname()
-        print (" post fname: ", self.data.shape)
-
-        #
-        if os.path.exists(self.fname)==False:
-            print ("missing: ", self.fname)
             self.data = np.zeros((0))
             return
 
@@ -540,7 +646,7 @@ class Visualize():
         temp2 = multipletests(temp, alpha=self.significance, method='fdr_bh')
         sig = temp2[1]
 
-        #
+        # Expand this so we can plot it as a 1D image.
         sig=np.array(sig)[None]
 
         #
@@ -552,22 +658,27 @@ class Visualize():
         idx = np.where(self.mean<0.5)
         sig[:,idx] = np.nan
 
-        # use only first half
-        self.sig = sig #[ :,:sig.shape[1]//2]
+        # save it
+        self.sig = sig
         print ("Final sig: ", self.sig.shape)
 
         # find earliest significant;
         earliest_continuous = 0
         for k in range(self.sig.shape[1]-1,0,-1):
+            if np.isnan(self.sig[0][k]):
+                earliest_continuous = k+1
+                break
+
             if self.sig[0][k]<=self.significance:
-                earliest_continuous = k
+                earliest_continuous = k+1
             else:
                 break
 
+        #
         print ("earliest: ", earliest_continuous,
                " in sec: ", -(self.sig.shape[1]-earliest_continuous)/30.)
 
-        self.earliest_continuous = earliest_continuous
+        self.earliest_continuous = -(self.sig.shape[1]-earliest_continuous)/30.
 
 
 
@@ -1110,6 +1221,9 @@ class Visualize():
 
     def plot_significant(self, clr, label):
 
+        # set continuos to
+        self.earliest_continuous = np.nan
+
         # GET FILENAME IF EXISTS
         self.get_fname()
         if self.fname is None:
@@ -1118,7 +1232,6 @@ class Visualize():
 
         # PROCESS SESSION
         self.process_session()
-        print ("post process: ", self.data.shape)
         self.n_trials_plotting.append(self.n_trials)
         if self.n_trials==0 or self.data.shape[0]==0:
             return
@@ -1138,17 +1251,17 @@ class Visualize():
         self.compute_significance()
 
         if self.show_EDT:
-            self.ax.annotate("EDT: "+str(round(-(self.sig.shape[1]-self.earliest_continuous)/30.,1))+"sec",
-                         xy=(-(self.sig.shape[1]-self.earliest_continuous)/30., 0.5),
-                         xytext=(-(self.sig.shape[1]-self.earliest_continuous)/30.-10, 0.7+self.edt_offset),
+            self.ax.annotate("EDT: "+str(round(self.earliest_continuous,2))+"sec",
+                         xy=(self.earliest_continuous, 0.5),
+                         xytext=(self.earliest_continuous-3, 0.75+self.edt_offset),
                          arrowprops=dict(arrowstyle="->"),
                          fontsize=20,
                          color=clr)
             self.edt_offset+=0.02
-            x = -(self.sig.shape[1]-self.earliest_continuous)/30.
+            x = self.earliest_continuous
 
             #
-            if False:
+            if True:
                 plt.fill_between([x,0], 0,1.0 ,
                              color='grey',alpha=.2)
 
