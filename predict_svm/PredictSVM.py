@@ -43,6 +43,28 @@ class PredictMultiState():
                         'code_04_lockout']
 
 
+
+    def load_ca_whole_stack(self, times):
+
+        #
+        data = np.load(self.fname_Ca_time_filters)
+        #if self.verbose:
+        #    print (" whole stack: ", data.shape)
+
+        #
+        stack = []
+        for t in times:
+            temp = data[int(t-self.window)*self.imaging_rate:int(t+self.window)*self.imaging_rate]
+            if temp.shape[0]==self.window*self.imaging_rate*2:
+                stack.append(temp)
+        temp = np.array(stack)
+
+        temp = temp.transpose(0,2,1)
+        #if self.verbose:
+        #    print ("  Ca stack: ", temp.shape)
+
+        return temp
+
     def load_data(self, session):
 
         # data = np.load('')
@@ -99,26 +121,72 @@ class PredictMultiState():
         self.X = self.data
         self.y = self.labels
 
+    def pre_svm_prepare_data(self):
 
-    def run(self):
+        print ("Trials stack (make sure same across D1): ", self.trials.shape)
+        for k in range(len(self.trials)):
+            print (k, " size: ", self.trials[k].shape)
 
-# # run svm
-#         accuracy, labels, predictions = self.compute_accuracy_svm_KFold()
-#
-#         # append data
-#         self.accuracy_array.append(accuracy)
-#         self.prediction_array.append(predictions)
-#         self.n_trials_array.append(n_max_trials)
+        # select window
+        t1 = 400
+        t2 = 400 + self.window
 
-        X = self.X
-        y = self.y
+        trials_window = self.trials[:,:,t1:t2]
+        print (trials_window.shape)
 
-        print ("X: ", X.shape)
-        print ("y: ", y.shape, y)
+        trials_window_flat = trials_window.reshape(trials_window.shape[0],
+                                                   trials_window.shape[1],
+                                                   -1)
+        print (trials_window_flat.shape)
 
-        X_train, X_test, y_train, y_test = train_test_split(X, y, train_size=0.8, random_state = 0)
-        print ("X_train: ", X_train.shape)
-        print ("X_test: ", X_test.shape)
+        # 10-fold split; should we randomize?
+        idx = np.array_split(np.random.choice(np.arange(trials_window_flat.shape[1]),
+                                              trials_window_flat.shape[1], replace=False),
+                             10)
+        print ("idx: ", idx)
+
+        # run 10-fold prediction;
+        # can parallelize this loop
+        for k in range(len(idx)):
+
+            #
+            idx_test = idx[k]
+            X_test = trials_window_flat[:,idx_test]
+            y_test = []
+            for f in range(X_test.shape[0]):
+                y_test.append(np.zeros(X_test[f].shape[0])+f)
+            y_test = np.hstack(y_test)
+            X_test = X_test.reshape(-1, X_test.shape[2])
+            print ("X_test: ", X_test.shape, " y_test: ", y_test.shape)
+            print (y_test)
+
+            #
+            idx_train = np.delete(np.arange(trials_window_flat.shape[1]), idx[k])
+            train = trials_window_flat[:,idx_train]
+            # print ("Train: ", train.shape)
+
+            # loop over all features/body parts and generate labels
+            y_train = []
+            X_train = []
+            for f in range(train.shape[0]):
+                y_train.append(np.zeros(train[f].shape[0])+f)
+                X_train.append(train[f])
+
+            X_train = np.vstack(X_train)
+            y_train = np.hstack(y_train)
+            print ("X_train: ", X_train.shape, " y_train: ", y_train.shape)
+
+            #
+            # Fit SVM/Classifier
+
+
+            # test SVM/Classifier
+
+            print ('')
+        # X_train, X_test, y_train, y_test =
+
+    def run(self, X_train, y_train):
+
         print ("y_train: ", y_train.shape)
         print ("y_test: ", y_test.shape)
 
