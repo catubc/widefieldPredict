@@ -128,91 +128,95 @@ class PredictMultiState():
             print (k, " size: ", self.trials[k].shape)
 
         # select window
-        t1 = 400
-        t2 = 400 + self.window
+        for t in range(0, self.trials[0].shape[1], self.sliding_window_step):
+            t1 = t
+            t2 = t + self.window
 
-        trials_window = self.trials[:,:,t1:t2]
-        print (trials_window.shape)
+            trials_window = self.trials[:,:,t1:t2]
+            print (trials_window.shape)
 
-        trials_window_flat = trials_window.reshape(trials_window.shape[0],
-                                                   trials_window.shape[1],
-                                                   -1)
-        print (trials_window_flat.shape)
+            trials_window_flat = trials_window.reshape(trials_window.shape[0],
+                                                       trials_window.shape[1],
+                                                       -1)
+            print (trials_window_flat.shape)
 
-        # 10-fold split; should we randomize?
-        idx = np.array_split(np.random.choice(np.arange(trials_window_flat.shape[1]),
-                                              trials_window_flat.shape[1], replace=False),
-                             10)
-        print ("idx: ", idx)
+            # 10-fold split; should we randomize?
+            idx = np.array_split(np.random.choice(np.arange(trials_window_flat.shape[1]),
+                                                  trials_window_flat.shape[1], replace=False),
+                                 10)
+            print ("idx: ", idx)
 
-        # run 10-fold prediction;
-        # can parallelize this loop
-        for k in range(len(idx)):
+            if self.parallel:
+                acc = parmap.map(svm_10fold, np.arange(10),
+                           idx,
+                           trials_window_flat,
+                           pm_processes = self.n_cores)
+            else:
+                acc = []
+                for k in range(10):
+                    acc.append(svm_10fold(k, idx, trials_window_flat))
 
-            #
-            idx_test = idx[k]
-            X_test = trials_window_flat[:,idx_test]
-            y_test = []
-            for f in range(X_test.shape[0]):
-                y_test.append(np.zeros(X_test[f].shape[0])+f)
-            y_test = np.hstack(y_test)
-            X_test = X_test.reshape(-1, X_test.shape[2])
-            print ("X_test: ", X_test.shape, " y_test: ", y_test.shape)
-            print (y_test)
+            print (acc)
+            # run 10-fold prediction;
+            # can parallelize this loop
 
-            #
-            idx_train = np.delete(np.arange(trials_window_flat.shape[1]), idx[k])
-            train = trials_window_flat[:,idx_train]
-            # print ("Train: ", train.shape)
+def svm_10fold(k,
+               idx,
+               trials_window_flat,
+               ):
 
-            # loop over all features/body parts and generate labels
-            y_train = []
-            X_train = []
-            for f in range(train.shape[0]):
-                y_train.append(np.zeros(train[f].shape[0])+f)
-                X_train.append(train[f])
+    #
+    idx_test = idx[k]
+    X_test = trials_window_flat[:,idx_test]
+    y_test = []
+    for f in range(X_test.shape[0]):
+        y_test.append(np.zeros(X_test[f].shape[0])+f)
+    y_test = np.hstack(y_test)
+    X_test = X_test.reshape(-1, X_test.shape[2])
+    print ("X_test: ", X_test.shape, " y_test: ", y_test.shape)
 
-            X_train = np.vstack(X_train)
-            y_train = np.hstack(y_train)
-            print ("X_train: ", X_train.shape, " y_train: ", y_train.shape)
+    #
+    idx_train = np.delete(np.arange(trials_window_flat.shape[1]), idx[k])
+    train = trials_window_flat[:,idx_train]
+    # print ("Train: ", train.shape)
 
-            #
-            # Fit SVM/Classifier
+    # loop over all features/body parts and generate labels
+    y_train = []
+    X_train = []
+    for f in range(train.shape[0]):
+        y_train.append(np.zeros(train[f].shape[0])+f)
+        X_train.append(train[f])
 
+    X_train = np.vstack(X_train)
+    y_train = np.hstack(y_train)
+    #print ("X_train: ", X_train.shape, " y_train: ", y_train.shape)
 
-            # test SVM/Classifier
+    #
+    # Fit SVM/Classifier
+    acc = run_multi_variate_single(X_train, y_train, X_test, y_test)
 
-            print ('')
-        # X_train, X_test, y_train, y_test =
+    return acc
 
-    def run(self, X_train, y_train):
+# X_train, X_test, y_train, y_test =
 
-        print ("y_train: ", y_train.shape)
-        print ("y_test: ", y_test.shape)
+def run_multi_variate_single(X_train, y_train, X_test, y_test):
 
-        linear = svm.SVC(kernel='linear', C=1, decision_function_shape='ovo').fit(X_train, y_train)
-        rbf = svm.SVC(kernel='rbf', gamma=1, C=1, decision_function_shape='ovo').fit(X_train, y_train)
-        poly = svm.SVC(kernel='poly', degree=3, C=1, decision_function_shape='ovo').fit(X_train, y_train)
-        sig = svm.SVC(kernel='sigmoid', C=1, decision_function_shape='ovo').fit(X_train, y_train)
+   # print ("y_train: ", y_train.shape)
+   # print ("y_test: ", y_test.shape)
 
+    linear = svm.SVC(kernel='linear', C=1, decision_function_shape='ovo').fit(X_train, y_train)
+    rbf = svm.SVC(kernel='rbf', gamma=1, C=1, decision_function_shape='ovo').fit(X_train, y_train)
+    poly = svm.SVC(kernel='poly', degree=3, C=1, decision_function_shape='ovo').fit(X_train, y_train)
+    sig = svm.SVC(kernel='sigmoid', C=1, decision_function_shape='ovo').fit(X_train, y_train)
 
-        linear_pred = linear.predict(X_test)
-        poly_pred = poly.predict(X_test)
-        rbf_pred = rbf.predict(X_test)
-        sig_pred = sig.predict(X_test)
+    # retrieve the accuracy and print it for all 4 kernel functions
+    accuracy_lin = linear.score(X_test, y_test)
+    accuracy_poly = poly.score(X_test, y_test)
+    accuracy_rbf = rbf.score(X_test, y_test)
+    accuracy_sig = sig.score(X_test, y_test)
 
-
-        # retrieve the accuracy and print it for all 4 kernel functions
-        accuracy_lin = linear.score(X_test, y_test)
-        accuracy_poly = poly.score(X_test, y_test)
-        accuracy_rbf = rbf.score(X_test, y_test)
-        accuracy_sig = sig.score(X_test, y_test)
-
-        #
-        print('Accuracy Linear Kernel:', accuracy_lin)
-        print('Accuracy Polynomial Kernel:', accuracy_poly)
-        print('“Accuracy Radial Basis Kernel:', accuracy_rbf)
-        print('Accuracy Sigmoid Kernel:', accuracy_sig)
+    #
+    return accuracy_sig
 
 
 class PredictSVMTime():
