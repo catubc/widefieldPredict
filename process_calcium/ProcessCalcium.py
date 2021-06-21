@@ -301,7 +301,7 @@ class ProcessCalcium():
 
             return np.zeros((0),'float32')
 
-        # compute imaging rate;
+        # compute imaging rate: divide number of images between start_led to end_led by the reclength recorded separately
         session_img_rate = n_images/reclength
 
         if abs(session_img_rate-float(img_rate))<0.01:         #Compare computed session img_rate w. experimentally set img_rate
@@ -326,6 +326,18 @@ class ProcessCalcium():
             #img_frame_triggers.append(self.find_previous(frame_times, trigger_times[i]))
             img_frame_triggers.append(self.find_nearest(frame_times, trigger_times[i]))     #Two different functions possible here;
 
+        # EXIT IF ONLY NEED TO DO IS SAVE blue light and img_frame_triggers:
+        if self.export_blue_light_times==True:
+
+            fname_out = os.path.split(self.fname_04)[0]
+            np.savez(fname_out+"/blue_light_frame_triggers.npz",
+                     start_blue=start_blue,
+                     end_blue=end_blue,
+                     img_frame_triggers=img_frame_triggers)
+
+            return np.zeros((0),'float32')
+
+
         #
         mean_file = root_dir + '/tif_files/'+recording + '/'+recording + '_aligned_mean.npy'
         if os.path.exists(mean_file)==False:
@@ -344,6 +356,9 @@ class ProcessCalcium():
         # counter=-1
         window = n_sec * session_img_rate      #THIS MAY NOT BE GOOD ENOUGH; SHOULD ALWAYS GO BACK AT LEAST X SECONDS EVEN IF WINDOW IS ONLY 1SEC or 0.5sec...
                                                                 #Alternatively: always compute using at least 3sec window, and then just zoom in
+
+
+
         ##################################################
         ##################################################
         ##################################################
@@ -907,7 +922,7 @@ class ProcessCalcium():
         else:
             fname_time_filters = fname_04[:-4]+"_pca_"+str(self.pca_explained_var_val)+".npy"
 
-        if os.path.exists(fname_time_filters):
+        if os.path.exists(fname_time_filters) and self.export_blue_light_times==False:
             print ("  ... data already processed", fname_time_filters)
             return
 

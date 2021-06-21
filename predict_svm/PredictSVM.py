@@ -10,6 +10,7 @@ import warnings
 import pickle
 import torch
 import pickle as pk
+import pycorrelate
 
 import sklearn
 from sklearn.preprocessing import StandardScaler
@@ -45,7 +46,166 @@ class PredictMultiState():
                         'code_04',
                         'code_04_lockout']
 
+        self.imaging_rate = 30
 
+
+    def get_sessions(self):
+
+        self.sessions = get_sessions(self.root_dir,
+                                     self.animal_id,
+                                     self.session_id)
+
+
+
+    def load_trials_lever_pulls(self):
+
+        # make SVM_Scores output for animal
+        try:
+            os.mkdir(os.path.join(self.main_dir, self.animal_id, "RandomForest_Scores"))
+        except:
+            pass
+
+        for s in range(len(self.sessions)):
+            #
+            print ("  running: ", self.sessions[s])
+
+            # filename of the PCA denoised whole stack
+            self.fname_Ca_time_filters = os.path.join(self.root_dir, self.animal_id,'tif_files',
+                                                     self.sessions[s],
+                                                     self.sessions[s]+"_whole_stack_trial_ROItimeCourses_"+
+                                                     str(self.window)+'sec'+
+                                                     '_pca'+str(self.all_comps)+'components.npy'
+                                                     )
+
+            if os.path.exists(self.fname_Ca_time_filters)==False:
+                print ("   [Ca] file missing, skipping ...")
+                continue
+            #
+            # if os.path.exists(fname_out) and self.overwrite==False:
+            #     print ("   already computed, skipping ...")
+            #     continue
+
+            code_04_times, code_04_times_lockout = load_code04_times(self.root_dir,
+                                                                     self.animal_id,
+                                                                     self.lockout_window,
+                                                                     self.sessions[s])
+
+            ################################################
+            ############## GRAB CA DATA ####################
+            ################################################
+
+            # load code_04 data:
+            trials_04_times = code_04_times
+            self.trials = self.load_ca_whole_stack(trials_04_times)
+
+
+    def load_trials(self):
+
+        # make SVM_Scores output for animal
+        try:
+            os.mkdir(os.path.join(self.main_dir, self.animal_id, "RandomForest_Scores"))
+        except:
+            pass
+
+        for s in range(len(self.sessions)):
+            #
+            print ("  running: ", self.sessions[s])
+
+            #  name of accuracy pickle file to save at the end.
+            fname_out = os.path.join(self.root_dir, self.animal_id,'SVM_Scores',
+                                 'RandomForest_Scores_'+
+                                 self.sessions[s]+
+                                 self.code+
+                                 'window'+str(self.window)+"sec"+
+                                 "_Xvalid"+str(self.xvalidation)+
+                                 "_Slidewindow"+str(self.sliding_window)+"Frames"+
+                                 '_accuracy.pk'
+                                 )
+
+            # filename of the PCA denoised whole stack
+            self.fname_Ca_time_filters = os.path.join(self.root_dir, self.animal_id,'tif_files',
+                                                     self.sessions[s],
+                                                     self.sessions[s]+"_whole_stack_trial_ROItimeCourses_"+
+                                                     str(self.window)+'sec'+
+                                                     '_pca'+str(self.all_comps)+'components.npy'
+                                                     )
+
+            if os.path.exists(self.fname_Ca_time_filters)==False:
+                print ("   [Ca] file missing, skipping ...")
+                continue
+            #
+            if os.path.exists(fname_out) and self.overwrite==False:
+                print ("   already computed, skipping ...")
+                continue
+
+            # get body initiations from the DLC movement file:
+            (self.feature_quiescent,
+             self.code_04_times_unshifted,
+             self.features_unshifted) = load_trial_times_whole_stack(self.root_dir,
+                                                       self.animal_id,
+                                                       self.sessions[s],
+                                                       self.no_movement)
+
+            # remove features within distance of ecah other
+            if self.inter_feature_lockout_window>0:
+                self.enforce_inter_feature_lockout()
+
+            ##################################################################
+            ############## COMPUTE SVM FOR BODY MOVEMENTS ####################
+            ##################################################################
+            local_trials = []
+            n_trials = []
+            for k in self.features_selected:
+                # load times
+                temp_trials = np.vstack(self.feature_quiescent[k])
+                trial_times = temp_trials[:,1]
+
+                temp = self.load_ca_whole_stack(trial_times)
+                n_trials.append(temp.shape[0])
+                local_trials.append(temp)
+
+            min_ = np.min(n_trials)
+            #
+            self.trials = []
+            for k in range(len(local_trials)):
+                self.trials.append(local_trials[k][:min_])
+
+            self.trials = np.array(self.trials).transpose(0,1,3,2)
+
+    def enforce_inter_feature_lockout(self):
+
+        while True:
+            trials_array = []
+            for k in self.features_selected:
+                # load times
+                #print (k, self.feature_quiescent[k])
+                temp = np.vstack(self.feature_quiescent[k])
+                trials_array.append(temp[:,1])
+
+            pairs = []
+            for k in range(len(trials_array[0])):
+                # select a feature time series
+                t = trials_array[0][k]
+                #print (t, trials_array[0], trials_array[1])
+                if np.min(np.abs(t-trials_array[1]))<self.inter_feature_lockout_window:
+                    id2 = np.argmin(np.abs(t-trials_array[1]))
+                    pairs.append([k, id2])
+
+            if len(pairs)==0:
+                break
+            pairs = np.vstack(pairs)
+
+            idx0 = pairs[:,0][::2]
+            idx1 = pairs[:,1][1::2]
+
+            self.feature_quiescent[self.features_selected[0]] = np.delete(
+                                                self.feature_quiescent[self.features_selected[0]],
+                                                  idx0,0)
+            self.feature_quiescent[self.features_selected[1]] = np.delete(
+                                                self.feature_quiescent[self.features_selected[1]],
+                                                  idx1,0)
+        #print ("Left times: ",self.feature_quiescent[self.features_selected[0]][:10][:,1])
+        #print (  self.feature_quiescent[self.features_selected[1]][:10][:,1])
 
     def load_ca_whole_stack(self, times):
 
@@ -68,63 +228,11 @@ class PredictMultiState():
 
         return temp
 
-    def load_data(self, session):
-
-        # data = np.load('')
-        # iris = datasets.load_iris()#Store variables as target y and the first two features as X (sepal length and sepal width of the iris flowers)
-
-        # grab movement initiation arrays
-        fname = os.path.join(self.root_dir, self.animal_id,'tif_files',
-                             session,
-                             session+'_'+
-                             str(self.no_movement)+"secNoMove_movements.npz"
-                             )
-
-        #
-        data = np.load(fname, allow_pickle=True)
-        self.feature_quiescent = data['feature_quiescent']
-        self.all_quiescent = data['all_quiescent']
-
-        self.trial_times = []
-        for k in range(len(self.feature_quiescent)):
-            print (self.labels[k], np.array(self.feature_quiescent[k]).shape)
-
-            temp_trials = np.vstack(self.feature_quiescent[self.selected_feature_id])
-            self.trial_times.append(temp_trials[:,1])
-
-    def pre_svm_run(self):
-        # load [Ca] data
-        self.trials = self.load_ca_whole_stack(self.trial_times)
-
-        # get random times for that feature
-        self.generate_random_trials()
-
-        # load [Ca] data
-        self.random = self.load_ca_whole_stack(self.random_times)
-
-        # ensure same size
-        n_max_trials = min(self.trials.shape[0], self.random.shape[0])
-        self.trials = self.trials[:n_max_trials]
-        self.random = self.random[:n_max_trials]
-
-        # check to see if below min size for xvalidation
-        if n_max_trials<self.min_trials:
-            self.accuracy_array.append([])
-            self.prediction_array.append([])
-            self.n_trials_array.append(n_max_trials)
-            return
+    def prepare_and_run_classifier_time_chunks(self):
+        pass
 
 
-        # self.data = ...
-        # self.labels = ...
-
-
-    def set_data(self):
-
-        self.X = self.data
-        self.y = self.labels
-
-    def prepare_and_run_svm(self):
+    def prepare_and_run_classifier(self):
 
         print ("Trials stack (make sure same across D1): ", self.trials.shape)
         for k in range(len(self.trials)):
@@ -133,23 +241,78 @@ class PredictMultiState():
         # select window
         t_array = np.arange(0, self.trials[0].shape[1], self.sliding_window_step)
 
+        res = []
         if self.parallel:
-            self.acc = parmap.map(run_classifier, t_array,
-                                  self.window,
+            res = parmap.map(run_classifier,
+                                  t_array,
+                                  self.sliding_window,
                                   self.trials,
                                   self.classifier,
                                   pm_pbar=True,
                                   pm_processes = self.n_cores
                                   )
         else:
-            self.acc = []
+            res = []
             for t in t_array:
-                self.acc.append(run_classifier(t,
-                                self.window,
+                res.append(run_classifier(t,
+                                self.sliding_window,
                                 self.trials,
                                 self.classifier))
 
+        self.acc = []
+        self.coef = []
+        for k in range(len(res)):
+            self.acc.append(res[k][0])
+            self.coef.append(res[k][1])
 
+def get_lever_offset_seconds(main_dir,
+                     animal_id,
+                     session_corrected,
+                     imaging_rate=30):
+
+    fname_lever_offset = os.path.join(main_dir,
+                                     animal_id,
+                                     'tif_files',
+                                     session_corrected,
+                                     session_corrected+"_lever_offset_n_frames.txt")
+
+    if os.path.exists(fname_lever_offset)==False:
+
+        images_file = fname_lever_offset.replace('_lever_offset_n_frames.txt','_aligned.npy')
+
+        aligned_images = np.load(images_file)
+
+        # Find blue light on/off
+        blue_light_threshold = 400  #Intensity threshold; when this value is reached - imaging light was turned on
+        start_blue = 0; end_blue = aligned_images.shape[0]
+
+        if np.average(aligned_images[0])> blue_light_threshold:    #Case #1: imaging starts with light on; need to remove end chunk; though likely bad recording
+            for k in range(len(aligned_images)):
+                if np.average(aligned_images[k])< blue_light_threshold:
+                    #self.aligned_images = self.aligned_images[k:]
+                    end_blue = k
+                    break
+        else:                                                           #Case #2: start with light off; remove starting and end chunks;
+            #Find first light on
+            for k in range(len(aligned_images)):
+                if np.average(aligned_images[k])> blue_light_threshold:
+                    start_blue = k
+                    break
+
+            #Find light off - count backwards from end of imaging data
+            for k in range(len(aligned_images)-1,0,-1):
+                if np.average(aligned_images[k])> blue_light_threshold:
+                    end_blue= k
+                    break
+
+        lever_offset = start_blue
+
+        #np.savetxt(fname_lever_offset, [self.lever_offset])
+
+    else:
+        lever_offset = int(np.loadtxt(fname_lever_offset))
+
+    return lever_offset/imaging_rate
 
 def run_classifier(t,
                    window,
@@ -162,7 +325,7 @@ def run_classifier(t,
     t2 = t + window
 
     trials_window = trials[:,:,t1:t2]
-    #print (trials_window.shape)
+    # print ("trials full in: ", trials.shape, "trials window: ", trials_window.shape)
 
     trials_window_flat = trials_window.reshape(trials_window.shape[0],
                                                trials_window.shape[1],
@@ -174,11 +337,18 @@ def run_classifier(t,
                                           trials_window_flat.shape[1], replace=False),
                          10)
     #
-    acc = []
+    res = []
     for k in range(10):
-        acc.append(run_10fold(k, idx, trials_window_flat, classifier))
+        res.append(run_10fold(k, idx,
+                              trials_window_flat,
+                              classifier))
+    acc = []
+    coef = []
+    for k in range(len(res)):
+        acc.append(res[k][0])
+        coef.append(res[k][1])
 
-    return acc
+    return acc, coef
 
     # run 10-fold prediction;
     # can parallelize this loop
@@ -224,51 +394,158 @@ def run_10fold(k,
     # Fit SVM/Classifier
 
     if classifier == 'svm':
-        acc = run_svm_multi_variate(X_train, y_train, X_test, y_test)
+        acc, svm_coef = run_svm_multi_variate(X_train, y_train, X_test, y_test)
     elif classifier == 'random_forest':
         acc = run_random_forest_multi_variate(X_train, y_train, X_test, y_test)
+        svm_coef = []
     else:
         print ("Classifer uknonwn")
         return None
-    return acc
+    return acc, svm_coef
+
+
+#
+def run_10fold_multi_class(k,
+                           idx,
+                           trials,
+                           classifier,
+                           ):
+
+    #
+    print ("Raw trials: ", trials.shape)
+    np.save('/home/cat/trials.npy', trials)
+    # grab first half of data
+    window_start1 = 0
+    window_start2 = 870
+    window_len = 20
+    trials_pre_movement = trials[:,:, :trials.shape[2]//2]
+    trials_pre_movement = np.concatenate((trials[:,:, window_start1:window_start1+window_len],
+    #trials_pre_movement = np.concatenate((np.zeros(trials[:,:, 0:30].shape),
+                                         trials[:,:,window_start2:window_start2+window_len]), axis=2)
+
+    print ("Trials pre movement: ", trials_pre_movement.shape)
+
+    # chop up the data into 1 sec windows
+    trials_pre_chunks = np.array(np.array_split(
+                                        trials_pre_movement.transpose(2,0,1), 2)).transpose(0,2,1,3)
+    print ("Trials pre + segments: ", trials_pre_chunks.shape)
+
+    # flattend data
+    trials_pre_chunks=trials_pre_chunks.transpose((0,1,3,2))
+
+    trials_pre_chunks_flat = trials_pre_chunks.reshape(trials_pre_chunks.shape[0],
+                                                       trials_pre_chunks.shape[1],
+                                                       -1)
+    #
+    print ("trials_pre_chunks_flat: ", trials_pre_chunks_flat.shape)
+
+    # select particular id of test data
+    idx_test = idx[k]
+    X_test = trials_pre_chunks_flat[:,idx_test]
+
+    # loop over all classes
+    y_test = []
+    for f in range(X_test.shape[0]):
+        y_test.append(np.zeros(X_test[f].shape[0])+f)
+    y_test = np.array(y_test).reshape(-1)
+    X_test = X_test.reshape(-1, X_test.shape[2])
+    print ("X_test: ", X_test.shape, "  y_test: ", y_test)
+
+    #
+    idx_train = np.delete(np.arange(trials_pre_chunks_flat.shape[1]), idx[k])
+    train = trials_pre_chunks_flat[:,idx_train]
+    print ("train: ", train.shape)
+
+    # loop over all features/body parts and generate labels
+    y_train = []
+    X_train = []
+    for f in range(train.shape[0]):
+        y_train.append(np.zeros(train[f].shape[0])+f)
+        X_train.append(train[f])
+
+    X_train = np.vstack(X_train)
+    y_train = np.hstack(y_train)
+    print ("X_train: ", X_train.shape, " y_train: ", y_train.shape)
+    print ("  y_test:   ", y_test)
+
+    # RAPLACE DATA
+    if False:
+        r = np.load('/media/cat/4TBSSD/yuki/IJ2/tif_files/IJ2pm_Feb5_30Hz/IJ2pm_Feb5_30Hz_code_04_random_ROItimeCourses_30sec_pca_0.95.npy')
+        r = r[:,:,:900]
+        print ("Random: ", r.shape)
+
+        #
+        t = np.load('/media/cat/4TBSSD/yuki/IJ2/tif_files/IJ2pm_Feb5_30Hz/IJ2pm_Feb5_30Hz_code_04_trial_ROItimeCourses_30sec_pca_0.95.npy')
+        t = t[:,:,:900]
+        print ("trials: ", t.shape)
+
+        window_start = 750
+        window_len = 30
+        X_train = np.vstack((t[:40,:,window_start:window_start+window_len].reshape(40,-1),
+                             r[:40,:,window_start:window_start+window_len].reshape(40,-1)))
+        print ("X_TRAIN: ", X_train.shape)
+        y_train = np.hstack((np.ones(40), np.zeros(40)))
+
+        X_test = np.vstack((t[40:,:,window_start:window_start+window_len].reshape(12,-1),
+                            r[40:,:,window_start:window_start+window_len].reshape(12,-1)))
+        y_test = np.hstack((np.ones(12), np.zeros(12)))
+        print ("X_TEST: ", X_test.shape)
+        print ("y_test:     ", y_test)
+
+    # STANDARDIZE DATA
+    scaler = StandardScaler()
+    X_train = scaler.fit_transform(X_train)
+    X_test = scaler.transform(X_test)
+
+    #
+    # Fit SVM/Classifier
+
+    if classifier == 'svm':
+        prediction = run_svm_multi_variate(X_train, y_train, X_test, y_test)
+    elif classifier == 'random_forest':
+        prediction = run_random_forest_multi_variate(X_train, y_train, X_test, y_test)
+    else:
+        print ("Classifer uknonwn")
+        return None
+    print ("prediction: ", prediction)
+    print ('')
+    print ('')
+
+    return prediction
+
 
 # X_train, X_test, y_train, y_test =
 
 def run_svm_multi_variate(X_train, y_train, X_test, y_test):
 
     #linear = svm.SVC(kernel='linear', C=1, decision_function_shape='ovo').fit(X_train, y_train)
-    #rbf = svm.SVC(kernel='rbf', gamma=1, C=1, decision_function_shape='ovo').fit(X_train, y_train)
+    # s = svm.SVC(kernel='rbf', gamma=1, C=1, decision_function_shape='ovo').fit(X_train, y_train)
     #poly = svm.SVC(kernel='poly', degree=3, C=1, decision_function_shape='ovo').fit(X_train, y_train)
-    sig = svm.SVC(kernel='sigmoid', C=1, decision_function_shape='ovo').fit(X_train, y_train)
+    s = svm.SVC(kernel='sigmoid',
+    #s = svm.SVC(kernel='linear',
+                C=1,
+                decision_function_shape='ovo').fit(X_train, y_train)
 
     # retrieve the accuracy and print it for all 4 kernel functions
-    #accuracy_lin = linear.score(X_test, y_test)
-    #accuracy_poly = poly.score(X_test, y_test)
-    #accuracy_rbf = rbf.score(X_test, y_test)
-    accuracy_sig = sig.score(X_test, y_test)
+    #accuracy = s.score(X_test, y_test)
+    prediction = s.predict(X_test)
 
     #
-    return accuracy_sig
+    # print ("s.coef_ ", s.coef_.shape, X_train.shape)
+    return prediction
 
 
 def run_random_forest_multi_variate(X_train, y_train, X_test, y_test):
 
     #  Fitting Random Forest Classification to the Training set
-    classifier = RandomForestClassifier(n_estimators=10,
+    classifier = RandomForestClassifier(n_estimators=100,
                                         n_jobs=1)
     classifier.fit(X_train, y_train)
 
-    # # Predicting the Test set results
-    # y_pred = classifier.predict(X_test)
-    #
-    # #Reverse factorize (converting y_pred from 0s,1s and 2s to Iris-setosa, Iris-versicolor and Iris-virginica
-    # reversefactor = dict(zip(range(3),definitions))
-    # y_test = np.vectorize(reversefactor.get)(y_test)
-    # y_pred = np.vectorize(reversefactor.get)(y_pred)
+    #accuracy_sig = classifier.score(X_test, y_test)
+    prediction = classifier.predict(X_test)
 
-    accuracy_sig = classifier.score(X_test, y_test)
-
-    return accuracy_sig
+    return prediction
 
 class PredictSVMTime():
 
@@ -357,16 +634,40 @@ class PredictSVMTime():
 
     #classification of time (10-class)
     def assign_class(self, X_assign):
-        X_l=X_assign[:,:300,:]
+
+        #
+        # X_l=X_assign[:,:300,:]
+        # X_k=X_l[:,0:30,:]
+        # X_k=X_k.reshape(X_k.shape[0],X_k.shape[1]*X_k.shape[2])
+        # for i in range(30,271,30):
+        #     X_t = X_l[:,i:i+30,:]
+        #     X_t=X_t.reshape(X_t.shape[0],X_t.shape[1]*X_t.shape[2])
+        #     X_k=np.concatenate((X_k,X_t),axis=0)
+        #
+        # y_ct=np.zeros(X_assign.shape[0])
+        # for i in range(1,10):
+        #     Z_ct=i*np.ones(X_assign.shape[0])
+        #     y_ct=np.concatenate((y_ct,Z_ct))
+        #
+        # X_tSVM=X_k
+        # y_tSVM=y_ct
+        # return X_tSVM,y_tSVM
+
+
+        X_l=X_assign[:,:,:]
+        print ("X_l: ", X_l.shape)
+
+        # stack all the windows on top of each other;
         X_k=X_l[:,0:30,:]
         X_k=X_k.reshape(X_k.shape[0],X_k.shape[1]*X_k.shape[2])
-        for i in range(30,271,30):
+        for i in range(30,X_l.shape[1],30):
             X_t = X_l[:,i:i+30,:]
             X_t=X_t.reshape(X_t.shape[0],X_t.shape[1]*X_t.shape[2])
             X_k=np.concatenate((X_k,X_t),axis=0)
 
+        # generate all class labels and stack them
         y_ct=np.zeros(X_assign.shape[0])
-        for i in range(1,10):
+        for i in range(1,30):
             Z_ct=i*np.ones(X_assign.shape[0])
             y_ct=np.concatenate((y_ct,Z_ct))
 
@@ -394,7 +695,7 @@ class PredictSVMTime():
         # switch last 2 dimensions; UNCLEAR WHY NEEDED...
         X=X.transpose((0,2,1))
 
-        #normalize
+        # normalize in flattened space and convert back to 3D
         X_R= X.reshape(-1,X.shape[1]*X.shape[2])
         normal_X = preprocessing.normalize(X_R)
         n_X=normal_X.reshape(X.shape[0],X.shape[1],X.shape[2])
@@ -407,6 +708,8 @@ class PredictSVMTime():
         clf = svm.SVC() # Non-linear classifier
         ten_svm=[]
         conf_matrix_ten=[]
+        y_array = []
+        y_true = []
         kf = KFold(n_splits=10,
                    random_state=None,
                    shuffle=True)
@@ -429,14 +732,24 @@ class PredictSVMTime():
           confusion_m=cm.T # make each row be the prediction
           conf_matrix_norm = confusion_m.astype('float') / confusion_m.sum(axis=1)[:,np.newaxis] #calculate the precision
           conf_matrix_norm = np.nan_to_num(conf_matrix_norm)
+
+          #
+          y_true.append(y_test_k)
+          y_array.append(y_predicted)
           ten_svm.append(score)
           conf_matrix_ten.append(conf_matrix_norm)
 
         #
-        self.get_fname_out()
+        try:
+            self.get_fname_out()
+        except:
+            self.fname_out = '/home/cat/concatenated_res.npz'
 
         # save data
         np.savez(self.fname_out,
+                 y_true = y_true,
+                 y_predicted = y_array,
+                 scores = ten_svm,
                  conf_matrix_ten = conf_matrix_ten,
                  n_trials = self.n_trials)
 
@@ -1426,7 +1739,7 @@ class PredictSVMConcatenated():
 
     def concatenate_denoised_sessions(self):
 
-        #
+
         trials = []
         random = []
         trials_in_sess = []
@@ -1577,6 +1890,21 @@ class PredictSVMConcatenated():
         self.pca = pca
         self.nComp = 20
 
+    def check_data_reconstruction(self):
+
+        fname_out = os.path.join(self.root_dir,self.animal_id,'tif_files',
+                             self.session_selected[0],
+                             self.session_selected[0]+
+                             "_globalPca_min_trials_concatenated"+
+                             str(self.min_trials_concatenated)+
+                             '_code_04_'+
+                             str(self.window)+
+                             '_concatenated_reconstructed_data.npz'
+                             )
+        if os.path.exists(fname_out):
+            return True
+
+        return False
 
     def check_complete(self):
 
@@ -1587,7 +1915,7 @@ class PredictSVMConcatenated():
                  "_globalPca_min_trials_concatenated"+
                  str(self.min_trials_concatenated)+
                  '_code_04_'+
-                 str(self.window)+'sec'+
+                 str(self.window)+'sec_time_chunks'+
                  '_accuracy.npz'
                          )
 
@@ -1702,6 +2030,107 @@ class PredictSVMConcatenated():
                 accuracy = accuracy,
                 labels = labels,
                 predictions = predictions)
+
+    #
+    def compute_accuracy_svm_concatenated_time_chunks(self):
+
+        if self.verbose:
+            print (" running compute_accuracy_svm time chunk wise")
+
+        print (" data into SVM self.trials: ", self.trials.shape)
+
+        # randomize seed
+        np.random.seed()
+
+        # split data by taking each session's length into account;
+        idx_trials = []
+        for p in range(self.xvalidation):
+            idx_trials.append([])
+        #
+        # self.trials = self.trials[50:]
+        idx_split = np.array_split(np.random.choice(
+                                                np.arange(self.trials.shape[0]),
+                                                           self.trials.shape[0],
+                                                           replace=False),
+                                           self.xvalidation)
+
+        #
+        idx = np.arange(self.xvalidation)
+
+        #
+        if self.parallel:
+            self.prediction = parmap.map(run_10fold_multi_class, idx,
+                                   idx_split,
+                                   self.trials,
+                                   self.classifier,
+                                   pm_processes=self.n_cores,
+                                   pm_pbar = True)
+        else:
+            self.prediction = []
+            for id_ in idx:
+                self.prediction.append(run_10fold_multi_class(id_,
+                                   idx_split,
+                                   self.trials,
+                                   self.classifier))
+
+
+        if False:
+            # select groups for parallel processing
+            run_ids = np.arange(self.xvalidation)
+            if self.parallel:
+                data = parmap.map(run_svm_single_randomized_kFold,
+                                               run_ids,
+                                               idx_trials_split,
+                                               idx_random_split,
+                                               self.trials,
+                                               self.random,
+                                               self.sliding_window,
+                                               self.method,                                           pm_processes = self.xvalidation,
+                                               pm_pbar=False)
+
+            else:
+                data = []
+                for k in range(run_ids.shape[0]):
+                    print ("   running xvaldiation: ", k,
+                           "  self.trials.shape: ", self.trials.shape)
+                    data.append(run_svm_single_randomized_kFold(
+                                                               run_ids[k],
+                                                               idx_trials_split,
+                                                               idx_random_split,
+                                                               self.trials,
+                                                               self.random,
+                                                               self.sliding_window,
+                                                               self.method))
+
+
+            #
+            accuracy = []
+            labels = []
+            predictions = []
+            for k in range(len(data)):
+                accuracy.append(data[k][0].T)
+                labels.append(data[k][1].T)
+                predictions.append(data[k][2].T)
+
+            accuracy = np.vstack(accuracy).T
+            labels = np.vstack(labels).T
+            predictions = np.vstack(predictions).T
+
+            #
+            fname_out = os.path.join(self.root_dir,self.animal_id,'tif_files',
+                             self.session_selected[0],
+                             self.session_selected[0]+
+                             "_globalPca_min_trials_concatenated"+
+                             str(self.min_trials_concatenated)+
+                             '_code_04_'+
+                             str(self.window)+'sec_time_chunks'+
+                             '_accuracy.npz'
+                             )
+
+            np.savez(fname_out,
+                    accuracy = accuracy,
+                    labels = labels,
+                    predictions = predictions)
 
 
     def pca_denoise_data(self, pca, data_stm, nComp):
@@ -1894,78 +2323,249 @@ def run_svm_single_randomized_kFold(run_id,
     #print ("inner loop: accraucy: ", accuracy2.shape, labels2.shape, pred2.shape)
     return accuracy2, labels2, pred2
 
-#
-#
-# # single standing function that can be parallelized
-# def run_svm_single_randomized_kFold(
-#                                    run_id,
-#                                    idx_trials_split,
-#                                    idx_random_split,
-#                                    window,
-#                                    method,
-#                                    trials,
-#                                    random):
-#
-#     # train data excludes the run_id
-#     idx_trials = np.delete(np.arange(trials.shape[0]),
-#                                idx_trials_split[run_id])
-#     idx_random = np.delete(np.arange(random.shape[0]),
-#                                idx_random_split[run_id])
-#
-#     # test data is the left over labels
-#     idx_trials_not = np.delete(np.arange(trials.shape[0]),idx_trials)
-#     idx_random_not = np.delete(np.arange(random.shape[0]),idx_random)
-#
-#     # stack train data
-#     train = np.vstack((trials[idx_trials],random[idx_random]))
-#     labels_train = np.hstack((np.ones(trials[idx_trials].shape[0]),
-#                               np.zeros(random[idx_random].shape[0])))
-#
-#     # stack test data
-#     test = np.vstack((trials[idx_trials_not], random[idx_random_not]))
-#     labels_test = np.hstack((np.ones(trials[idx_trials_not].shape[0]),
-#                              np.zeros(random[idx_random_not].shape[0])))
-#
-#     #
-#     accuracy2=[]
-#     labels2 = []
-#     pred2 = []
-#     for k in range(0, trials.shape[2]-window, 1):
-#         X = train#[:,:,:window]
-#         X = X[:,:,k:k+window]
-#         #if mean_filter:
-#         #    X = np.mean(X,2)
-#
-#         X = X.reshape(train.shape[0],-1)
-#
-#         #
-#         y = labels_train
-#
-#         #
-#         X = sklearn.preprocessing.scale(X)
-#
-#         #
-#         clf = svm.SVC(kernel=method)
-#         clf.fit(X, y)
-#
-#
-#         # test
-#         X_test = test[:,:,k:k+window]
-#
-#         X_test = X_test.reshape(X_test.shape[0],-1)
-#         X_test = sklearn.preprocessing.scale(X_test)
-#         #
-#         y_pred = clf.predict(X_test)
-#
-#         #
-#         acc = accuracy_score(labels_test, y_pred)
-#         accuracy2.append(acc)
-#         labels2.append(labels_test)
-#         pred2.append(y_pred)
-#
-#     accuracy2 = np.array(accuracy2)
-#     labels2 = np.array(labels2)
-#     pred2 = np.array(pred2)
-#
-#     #print ("inner loop: accraucy: ", accuracy2.shape, labels2.shape, pred2.shape)
-#     return accuracy2, labels2, pred2
+def get_sessions(main_dir,
+                 animal_id,
+                 session_id):
+     # load ordered sessions from file
+    sessions = np.load(os.path.join(main_dir,
+                                         animal_id,
+                                         'tif_files.npy'))
+    # grab session names from saved .npy files
+    data = []
+    for k in range(len(sessions)):
+        data.append(os.path.split(sessions[k])[1].replace('.tif',''))
+    sessions = data
+
+    #
+    if session_id != 'all':
+        final_session = []
+        session_number = None
+        for k in range(len(sessions)):
+            if session_id in sessions[k]:
+                final_session = [sessions[k]]
+                session_number = k
+                break
+        sessions = final_session
+
+    # fix binary string files issues; remove 'b and ' from file names
+    for k in range(len(sessions)):
+        sessions[k] = str(sessions[k]).replace("'b",'').replace("'","")
+        if sessions[k][0]=='b':
+            sessions[k] = sessions[k][1:]
+
+    sessions = np.array(sessions)
+
+    return sessions
+
+def load_trial_times_lever_pulls(root_dir,
+                                 animal_id,
+                                 session):
+
+    # load rewarded lever pull trigger times also
+    code_04_times, code_04_times_lockout = load_code04_times(root_dir,
+                                                             animal_id,
+                                                             no_movement,
+                                                             session)
+
+    code_04_times = np.array((code_04_times, code_04_times)).T
+    code_04_times_lockout = np.array((code_04_times_lockout, code_04_times_lockout)).T
+    shift_lever_to_ca = get_lever_offset_seconds(root_dir,
+                                                 animal_id,
+                                                 session
+                                                 )
+    print ("Lever to [Ca] shift: ", shift_lever_to_ca)
+
+    code_04_times -= shift_lever_to_ca
+    code_04_times_lockout -= shift_lever_to_ca
+
+
+    return code_04_times, code_04_times_lockout
+
+
+def load_trial_times_whole_stack(root_dir,
+                                 animal_id,
+                                 session,
+                                 no_movement):
+
+    # grab movement initiation arrays
+    fname = os.path.join(root_dir, animal_id,'tif_files',
+                         session,
+                         session+'_'+
+                         str(no_movement)+"secNoMove_movements.npz"
+                         )
+
+    # if no file return empty arrays?
+    if os.path.exists(fname)==False:
+        feature_quiescent = []
+        #
+        for k in range(7):
+            feature_quiescent.append([])
+
+        return None, None, None
+    #
+    data = np.load(fname, allow_pickle=True)
+    feature_quiescent = data['feature_quiescent']
+    all_quiescent = data['all_quiescent']
+
+    # load rewarded lever pull trigger times also
+    code_04_times, code_04_times_lockout = load_code04_times(root_dir,
+                                                              animal_id,
+                                                              no_movement,
+                                                              session)
+    code_04_times = np.array((code_04_times, code_04_times)).T
+    shift_lever_to_ca = get_lever_offset_seconds(root_dir,
+                                                 animal_id,
+                                                 session
+                                                 )
+    print ("Lever to [Ca] shift: ", shift_lever_to_ca)
+
+    #
+    bins = np.arange(-10,10,1/15.)
+
+    try:
+        res = pycorrelate.pcorrelate(code_04_times[:,1],
+                                 np.array(feature_quiescent[1])[:,1],
+                                 bins=bins)
+    except:
+        try:
+            res = pycorrelate.pcorrelate(code_04_times[:,1],
+                         np.array(feature_quiescent[0])[:,1],
+                         bins=bins)
+        except:
+            res = np.zeros((10))
+
+
+    argmax = np.argmax(res)
+    shift_DLC_to_ca = bins[argmax]
+    print ("DLC to [Ca] shift: ", shift_DLC_to_ca)
+
+    #
+    temp_ = []
+    for k in range(len(feature_quiescent)):
+        temp_.append(np.array(feature_quiescent[k])-shift_lever_to_ca)
+    temp_.append(all_quiescent)
+    temp_.append(code_04_times - shift_DLC_to_ca - shift_lever_to_ca)
+
+    return temp_, code_04_times, feature_quiescent
+
+
+###################################
+def get_DLC_shift_seconds(main_dir,
+                          animal_id,
+                          session,
+                          session_number):
+
+    fnames_good = os.path.join(main_dir,animal_id,'tif_files',
+                  'sessions_DLC_alignment_good.txt')
+
+    import csv
+    sessions = []
+    shift_ids = []
+    with open(fnames_good, newline='') as csvfile:
+        spamreader = csv.reader(csvfile, delimiter=' ', quotechar='|')
+        for row in spamreader:
+            sessions.append(str(row[0]))
+            shift_ids.append(row[1])
+
+    shift_id_str = shift_ids[session_number]
+
+    fname_correlate = os.path.join(main_dir, animal_id,
+                         'tif_files', session,
+                        'correlate.npz')
+
+    try:
+        data = np.load(fname_correlate,allow_pickle=True)
+    except:
+        print( " ... data missing", fname_correlate)
+        return None
+
+    cors = data['cors'].squeeze().T
+
+    #vis.shift = 0
+    print ("sessoin ID: ", session_number, "  left/right paw/lever ID used: ", shift_id_str)
+    if len(shift_id_str)>1:
+        shift_id = int(shift_id_str[0])
+        shift_additional = float(shift_id_str[1:])
+    else:
+        shift_id = int(shift_id_str)
+        shift_additional = 0
+
+    print ( " using shift: ", shift_id+shift_additional)
+
+    corr_featur_id = shift_id
+
+    temp_trace = cors[:,corr_featur_id]
+    temp_trace[:2000] = 0
+    temp_trace[-2000:] = 0
+    shift = round(np.argmax(temp_trace)/1000. - 15.,2)+shift_additional
+    print ("SHIFT Loaded: ", shift)
+
+    return shift
+
+########################################
+def load_code04_times(root_dir,
+                      animal_id,
+                      lockout_window,
+                      recording):
+
+    #
+    try:
+        fname = os.path.join(root_dir,animal_id, 'tif_files',recording,
+                             recording + '_locs44threshold.npy')
+        locs_44threshold = np.load(fname)
+    except:
+        print ("locs 44 thrshold missing", recording)
+        locs_code04 = np.zeros((0),'float32')
+        locs_code04_lockout = np.zeros((0),'float32')
+        return locs_code04, locs_code04_lockout
+
+    #
+    codes = np.load(os.path.join(root_dir,animal_id, 'tif_files',recording,
+                             recording + '_code44threshold.npy'))
+    code = b'04'
+    idx = np.where(codes==code)[0]
+    locs_selected = locs_44threshold[idx]
+
+    if locs_selected.shape[0]==0:
+        locs_code04 = np.zeros((0),'float32')
+        locs_code04_lockout = np.zeros((0),'float32')
+        return locs_code04, locs_code04_lockout
+
+    diffs = locs_selected[1:]-locs_selected[:-1]
+    idx = np.where(diffs>lockout_window)[0]
+
+    #
+    locs_selected_with_lockout = locs_selected[idx+1]
+    if locs_selected_with_lockout.shape[0]==0:
+        locs_code04 = np.zeros((0),'float32')
+        locs_code04_lockout = np.zeros((0),'float32')
+        return locs_code04, locs_code04_lockout
+
+    # ADD FIRST VAL
+    if locs_selected[0]>lockout_window:
+        locs_selected_with_lockout = np.concatenate(([locs_selected[0]], locs_selected_with_lockout), axis=0)
+
+    locs_code04 = locs_selected
+    locs_code04_lockout = locs_selected_with_lockout
+
+    return locs_code04, locs_code04_lockout
+
+
+def generate_random_trials(trial_times,
+                           sliding_window,
+                           lockout_window):
+
+    # generate random times outside the window of real trials
+    random = []
+    for k in range(10000):
+        t = np.random.rand()*1250+sliding_window*2
+        if np.min(np.abs(t-trial_times))>= lockout_window:
+            random.append(t)
+
+        if len(random)==len(trial_times):
+            break
+    #
+    random_times = np.array(random)
+
+    #
+    return random_times
