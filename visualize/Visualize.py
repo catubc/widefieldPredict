@@ -2067,11 +2067,9 @@ def get_sessions(main_dir,
     #
     if session_id != 'all':
         final_session = []
-        session_number = None
         for k in range(len(sessions)):
             if session_id in sessions[k]:
                 final_session = [sessions[k]]
-                session_number = k
                 break
         sessions = final_session
 
@@ -2525,16 +2523,16 @@ def get_data_and_triggers(pa):
     start_blue = meta['start_blue']
     triggers = meta['img_frame_triggers']
 
-    print (" triggers: ", triggers.shape)
+    #print (" triggers: ", triggers.shape)
 
     #
-    print (" data: ", data.shape)
+    #print (" data: ", data.shape)
 
     data_led = data[start_blue:end_blue]
-    print (data_led.shape)
+    #print (data_led.shape)
 
     X = data_led.reshape(data_led.shape[0],-1)
-    print ("X: ", X.shape)
+    #print ("X: ", X.shape)
 
     return X, triggers
 
@@ -2634,15 +2632,15 @@ def get_umap_object_and_all_points(pa):
 
 def project_data_pca(pa):
 
-    p_lever = np.zeros((pa.n_frames,
-                        pa.triggers.shape[0],
-                        pa.n_pca))
+    # p_lever = np.zeros((pa.n_frames,
+    #                     pa.triggers.shape[0],
+    #                     pa.n_pca))
     print (pa.n_frames,
            pa.triggers.shape[0],
            pa.n_pca)
 
     #
-    total_frames = pa.n_frames
+    # total_frames = pa.n_frames
     p_lever = []
     for t in trange(pa.n_frames):
         arr = []
@@ -2669,7 +2667,7 @@ def project_data_pca(pa):
     # if total_frames<pa.n_frames:
     #     p_lever = p_lever[:total_frames]
 
-    print (" pca p_levefr resahped: ", p_lever.shape)
+    #print (" pca p_levefr resahped: ", p_lever.shape)
 
     return p_lever
 
@@ -2711,7 +2709,7 @@ def plot_pca_scatter_multi(pa,
 
     # apply knn to all points
     temp_points = pa.all_points[:,:2]
-    print ("temp points: ", temp_points.shape)
+    #print ("temp points: ", temp_points.shape)
     idx_keep = knn_triage(knn_triage_threshold_all_points, temp_points)
     idx_keep = np.where(idx_keep==1)[0]
     all_points_knn = temp_points[idx_keep]
@@ -2721,7 +2719,7 @@ def plot_pca_scatter_multi(pa,
     knn_triage_threshold_lever = 100*(1-triage_value)
 
     temp_points = pa.p_lever[0,:,:2]
-    print ("temp points: ", temp_points.shape)
+    #print ("temp points: ", temp_points.shape)
     idx_keep = knn_triage(knn_triage_threshold_lever, temp_points)
     idx_keep = np.where(idx_keep==1)[0]
     p_lever_knn = temp_points[idx_keep]
@@ -2743,7 +2741,7 @@ def plot_pca_scatter_multi(pa,
     #     idx = np.arange(pa.all_points.shape[0])
     #     print (" all points: ", idx.shape)
 
-    print ("plever: ", p_lever_knn.shape)
+    #print ("plever: ", p_lever_knn.shape)
     start = 0
     end = n_frames
 
@@ -3207,9 +3205,9 @@ def load_starts_body_movements(pa
         return []
 
     features = data['feature_quiescent']
-    print (features.shape)
-    labels = data['labels']
-    print (labels)
+    #print (features.shape)
+    #labels = data['labels']
+    #print (labels)
     #temp = np.vstack(features[0])
 
     starts = []
@@ -3239,9 +3237,9 @@ def load_shift_ids(pa):
             sessions.append(str(row[0]).replace(',',''))
             shift_ids.append(row[1])
 
-    print ("SESSIONS: ", sessions)
-    print ("SHIFT IDS: ", shift_ids)
-    print ("pa.session_id: ", pa.session_id)
+    #print ("SESSIONS: ", sessions)
+    #print ("SHIFT IDS: ", shift_ids)
+    #print ("pa.session_id: ", pa.session_id)
 
     # grab the session id from the ordered data to figure out correct ID to shift
     found = False
@@ -3280,7 +3278,7 @@ def load_shifts(pa):
     cors = data['cors'].squeeze().T
 
     #
-    print ("SELF SHIFT ID: ", pa.shift_id_str)
+    #print ("SELF SHIFT ID: ", pa.shift_id_str)
     if len(pa.shift_id_str)>1:
         pa.shift_id = int(pa.shift_id_str[0])
         pa.shift_additional = float(pa.shift_id_str[1:])
@@ -3288,7 +3286,7 @@ def load_shifts(pa):
         pa.shift_id = int(pa.shift_id_str)
         pa.shift_additional = 0
 
-    print ( " using shift: ", pa.shift_id+pa.shift_additional)
+    #print ( " using shift: ", pa.shift_id+pa.shift_additional)
 
     corr_featur_id = pa.shift_id
 
@@ -3296,7 +3294,7 @@ def load_shifts(pa):
     temp_trace[:2000] = 0
     temp_trace[-2000:] = 0
     DLC_shift = round(np.argmax(temp_trace)/1000. - 15.,2)+pa.shift_additional
-    print ("DLC SHIFT Loaded: ", DLC_shift)
+    #print ("DLC SHIFT Loaded: ", DLC_shift)
 
     return DLC_shift
 
@@ -3311,8 +3309,8 @@ def pca_scatter_body_movements_fig3(pa, sessions):
         pa.session_id = session
         pa.session_corrected = session
         pa.session = session
-        print ("pa.session_id 1: ", pa.session_id )
-        print("session corrected: ", pa.session_corrected)
+        #print ("pa.session_id 1: ", pa.session_id )
+        #print("session corrected: ", pa.session_corrected)
 
         #
         fname_simplex = os.path.join(pa.root_dir,pa.animal_id,'tif_files',pa.session,
@@ -3326,15 +3324,15 @@ def pca_scatter_body_movements_fig3(pa, sessions):
                 res_simplex.append([])
                 continue
 
-            print ("pa.session_id 2: ", pa.session_id )
-            print ("starts: ", starts[0][:10])
+            #print ("pa.session_id 2: ", pa.session_id )
+            #print ("starts: ", starts[0][:10])
 
             ################################
             # get the lever offset
             lever_offset = get_lever_offset(pa.root_dir,
                                             pa.animal_id,
                                             pa.session)
-            print ("lever offset: ", lever_offset)
+            #print ("lever offset: ", lever_offset)
 
             ###################################
             # load shift ids
@@ -3349,9 +3347,9 @@ def pca_scatter_body_movements_fig3(pa, sessions):
             DLC_shift = load_shifts(pa)
             shift_frames = int(DLC_shift*pa.frame_rate)
             shift_relative = -(shift_frames-lever_offset)
-            print ("DLC shift : ", DLC_shift,
-                   "  in frames: ", shift_frames,
-                   " after subtracting lever shift: ", shift_relative)
+            #print ("DLC shift : ", DLC_shift,
+            #       "  in frames: ", shift_frames,
+            #       " after subtracting lever shift: ", shift_relative)
 
             ####################################
             # visualize
@@ -3365,12 +3363,12 @@ def pca_scatter_body_movements_fig3(pa, sessions):
 
             # get PCA or UMAP object and all points;
             pa.pca, pa.all_points = get_pca_object_and_all_points(pa)
-            print (" pca allpoints: ", pa.all_points.shape)
+            #print (" pca allpoints: ", pa.all_points.shape)
 
             ## use dim reduced data as input to UMAP
             if pa.umap_flag:
                 pa.umap, pa.all_points = get_umap_object_and_all_points(pa)
-                print (" umap allpoints: ", pa.all_points.shape)
+                #print (" umap allpoints: ", pa.all_points.shape)
 
             #
             # loop over all features
@@ -3397,8 +3395,8 @@ def pca_scatter_body_movements_fig3(pa, sessions):
                 # FIG 2 E top
                 # get pca projection first
                 pa.p_lever =  project_data_pca(pa)
-                print ("  body movement pa.p_lever projection: ",
-                       pa.p_lever.shape)
+                #print ("  body movement pa.p_lever projection: ",
+                #       pa.p_lever.shape)
 
                 # get UMAP projection second
                 if pa.umap_flag:
@@ -3421,7 +3419,7 @@ def pca_scatter_body_movements_fig3(pa, sessions):
             ######### PLOT LEVER ########
             #############################
             fname_lever = os.path.join(pa.root_dir, pa.animal_id,'tif_files',pa.session, pa.session+"_all_locs_selected.txt")
-            print ("FNAME LEVER: ", fname_lever)
+            #print ("FNAME LEVER: ", fname_lever)
             lever_times =np.loadtxt(fname_lever)
             pa.triggers = np.int32(np.array(lever_times)*pa.frame_rate)
             # print ("pa triggers: ", pa.triggers)
@@ -3484,23 +3482,49 @@ def convexhull(p):
 
 
 
-def plot_intersection_convex_hulls_lever_vs_bodyparts(res_simplex):
+def plot_intersection_convex_hulls_lever_vs_bodyparts(res_simplex,
+                                                      sessions,
+                                                      animal_id,
+                                                      root_dir):
     from shapely import geometry
 
     names = ['leftpaw','rightpaw','nose','jaw','ear','lever']
     clrs=['black','magenta','blue','green','red','brown']
 
+
     ctr = 0
     lever_vs_left_paw = []
     lever_vs_right_paw = []
+    lever_vs_all = []
+    n_trials = []
     for k in range(len(res_simplex)):
+
+        # find # of lever pulls in sessions
+        fname_session = os.path.join(root_dir, animal_id,'tif_files',sessions[k],
+                                     sessions[k]+"_all_locs_selected.txt")
+
+
+        #
         pa_simplex = res_simplex[k]
         if len(pa_simplex)==0:
             continue
 
+        #
+        if os.path.exists(fname_session):
+            lever_pull_times = np.loadtxt(fname_session)
+            n_pulls = lever_pull_times.shape[0]
+        else:
+            n_pulls = np.nan
+
+
+        n_trials.append(n_pulls)
+
         if ctr<=45:
             ax=plt.subplot(5,10,ctr+1)
 
+        ############################################
+        ### PLOT POLYGONS FOR EACH BODY MOVEMENT ###
+        ############################################
         polygons = []
         for p in range(len(pa_simplex)-1):
             pol_temp = []
@@ -3509,16 +3533,17 @@ def plot_intersection_convex_hulls_lever_vs_bodyparts(res_simplex):
                     temp = pa_simplex[p][aa].T
 
                     if ctr<=45:
+                        # only use label once
                         if aa==0:
                             plt.plot(temp[0],
                                  temp[1],c=clrs[p],
                                  label=names[p],
-                                linewidth=5)
+                                 linewidth=5)
                         else:
                             plt.plot(temp[0],
-                                 temp[1],c=clrs[p],
-                                linewidth=5)
-
+                                 temp[1],
+                                 c=clrs[p],
+                                 linewidth=5)
 
                     pol_temp.append(temp.T[0])
                     pol_temp.append(temp.T[1])
@@ -3529,7 +3554,9 @@ def plot_intersection_convex_hulls_lever_vs_bodyparts(res_simplex):
             else:
                 polygons.append([])
 
-        # compute all points outer surface
+        ########################################
+        ### Compute all_points outer surface ###
+        ########################################
         pts_simplex_all_points = pa_simplex[-1]
         pol_temp =[]
         for a in range(pts_simplex_all_points.shape[0]):
@@ -3555,7 +3582,9 @@ def plot_intersection_convex_hulls_lever_vs_bodyparts(res_simplex):
         polygons_all = pol_temp
         #
 
-        # Compute areas of all activity spaces
+        ########################################
+        # Compute areas of all neural spaces ###
+        ########################################
         areas = []
         for p in range(len(polygons)):
             if len(polygons[p])>0:
@@ -3564,13 +3593,24 @@ def plot_intersection_convex_hulls_lever_vs_bodyparts(res_simplex):
                 areas.append(polygon1.intersection(polygon2).area)
             else:
                 areas.append(np.nan)
+
         print ("all areas: ", areas)
         polygon1 = geometry.Polygon(polygons_all)
         polygon2 = geometry.Polygon(polygons_all)
         area_all = polygon1.intersection(polygon2).area
 
+        ############################################
+        ##### COMPUTE Intersection lever and all ###
+        ############################################
+        polygon1 = geometry.Polygon(polygons[5])
+        polygon2 = geometry.Polygon(polygons_all)
 
-        # compute intersections
+        intersection = polygon1.intersection(polygon2).area
+        lever_vs_all.append(intersection/area_all)
+
+        ####################################
+        ###### compute intersections #######
+        ####################################
         from shapely import geometry, ops
         for q in range(len(polygons)):
             for p in range(len(polygons)):
@@ -3582,21 +3622,27 @@ def plot_intersection_convex_hulls_lever_vs_bodyparts(res_simplex):
 
                 intersection = polygon1.intersection(polygon2).area
 
+                #
                 if q == 0 and p == 5:
                     if np.isnan(areas[p])==False:
-                        lever_vs_left_paw.append(intersection/areas[q])
+                        ratio = intersection/areas[q]
+                        #ratio = ratio/n_pulls
+                        lever_vs_left_paw.append(ratio)
 
                         print (names[q],names[p],
-                           "% of region: ", round(intersection/areas[q]*100,2), "%",
+                           "% of region: ", round(ratio*100,2), "%",
                            "% of all space: ", round(intersection/area_all*100,2), "%")
                     else:
                         lever_vs_left_paw.append(np.nan)
 
                 elif q == 1 and p == 5:
                     if np.isnan(areas[p])==False:
-                        lever_vs_right_paw.append(intersection/areas[q])
+                        ratio = intersection/areas[q]
+                        #ratio = ratio/n_pulls
+
+                        lever_vs_right_paw.append(ratio)
                         print (names[q],names[p],
-                           "% of region: ", round(intersection/areas[q]*100,2), "%",
+                           "% of region: ", round(ratio*100,2), "%",
                            "% of all space: ", round(intersection/area_all*100,2), "%")
                     else:
                         lever_vs_right_paw.append(np.nan)
@@ -3604,12 +3650,10 @@ def plot_intersection_convex_hulls_lever_vs_bodyparts(res_simplex):
             print ('')
         plt.xticks([])
         plt.yticks([])
-        #plt.xlim(left=-150000)
-        #if k==0:
-        #    plt.legend(fontsize=12)
+
         plt.title(sessions[k])
 
         #
         ctr+=1
 
-    return lever_vs_left_paw, lever_vs_right_paw
+    return lever_vs_left_paw, lever_vs_right_paw, lever_vs_all, n_trials
