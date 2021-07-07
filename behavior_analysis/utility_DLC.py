@@ -68,9 +68,25 @@ def plot_DLC_traces_vs_lever(shift, traces, labels, root_dir):
 
     plt.show()
     
-    
-    
-    
+class Analyze():
+
+    def __init__(self):
+
+        pass
+
+#
+def get_ordered_fnames_stand_alone(A): # load ordered sessions from file
+
+    data = np.load(os.path.join(A.root_dir, A.animal_id,'tif_files.npy'))
+
+    #
+    sessions = []
+    for k in range(len(data)):
+        sessions.append(os.path.split(data[k])[1].replace('.tif',''))
+
+    A.sessions = sessions
+
+    return A
 
 def feature_triggered_trace_plots(n_features, trace_id, 
                                   name_feature, traces, 
@@ -1560,18 +1576,18 @@ def plot_number_04_all_mice_all_sessions(main_dir,
 
 def load_lever_data(root_dir):
     temp = root_dir + '*abstimes.npy'
-    print ("TRYING TO LOAD ABSTIMES: ", temp)
-    fname = glob2.glob(temp)[0]
+    #print ("TRYING TO LOAD ABSTIMES: ", temp)
+    try:
+        fname = glob2.glob(temp)[0]
+    except:
+        return [], [], []
+
     abstimes = np.load(fname)
     fname = glob2.glob(root_dir + '*abspositions.npy')[0]
     abspositions = np.load(fname)
     fname = glob2.glob(root_dir + '*abscodes.npy')[0]
     abscodes = np.load(fname)
 
-    # print (abstimes.shape, abstimes)
-    # print (abspositions.shape, abspositions)
-    # print (abscodes.shape, abscodes)
-    
     return abstimes, abspositions, abscodes
     
 
