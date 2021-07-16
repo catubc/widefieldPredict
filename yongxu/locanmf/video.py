@@ -195,7 +195,7 @@ class RegionMetadata(FactorCollection):
         """ Allocate required tensors on device
 
         Parameter:
-            max_num_components: maximum number of components
+            max_num_components: maximumshow_ROIs number of components
             region_shape: region shape
             device: computation device
 

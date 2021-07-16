@@ -124,14 +124,17 @@ class LocaNMFClass():
 
                 fname_locs = os.path.join(self.root_dir, self.animal_id, 'tif_files',
                                           session, session + '_all_locs_selected.txt')
+                if os.path.exists(fname_locs)==False:
+                    print ("  no lever pulls, skipping ")
+                    continue
+
                 n_locs = np.loadtxt(fname_locs)
-                print (" n trials: ", n_locs.shape)
+                print ("")
+                print ("")
+                print (session, " has n trials: ", n_locs.shape)
                 if n_locs.shape[0]<self.min_trials:
                     print ("  too few trials, skipping ", n_locs.shape[0])
                     continue
-
-
-
 
                 fname_spatial = os.path.join(self.root_dir,self.animal_id, 'tif_files',
                                              session,
@@ -158,7 +161,7 @@ class LocaNMFClass():
                 temporal = np.transpose(temporal,[1,0,2])
 
                 denoised_temporal_name = np.reshape(temporal,[-1,temporal.shape[1]*temporal.shape[2]])
-                print('loaded data\n',flush=True)
+                #print('loaded data',flush=True)
 
                 #######################################
                 # Get data in the correct format
@@ -184,7 +187,8 @@ class LocaNMFClass():
                 if V.shape[0]!=U.shape[-1]:
                     print('Wrong dimensions of U and V!')
 
-                print("Rank of video : %d" % V.shape[0]); print("Number of timepoints : %d" % V.shape[1]);
+                print("Rank of video : %d" % V.shape[0])
+                print("Number of timepoints : %d" % V.shape[1]);
 
 
                 ##################################################
@@ -275,7 +279,8 @@ class LocaNMFClass():
                 #
                 print('v Rank Line Search')
                 t0 = time.time()
-                locanmf_comps,loc_save = LocaNMF.rank_linesearch(low_rank_video,
+                try:
+                    locanmf_comps,loc_save = LocaNMF.rank_linesearch(low_rank_video,
                                                                  region_metadata,
                                                                  region_videos,
                                                                  maxiter_rank=maxrank,
@@ -291,6 +296,9 @@ class LocaNMFClass():
                                                                  sample_prop=(1,1),
                                                                  device=device
                                                                 )
+                except:
+                    print (" locaNMF Failed, skipping")
+                    continue
                 #
                 if device=='cuda':
                     torch.cuda.synchronize()
